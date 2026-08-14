@@ -2,6 +2,20 @@
 
 DeepSeek Harness is a plugin-based agent harness on vendored Cordis: **everything is a plugin**. Read [docs/architecture.md](docs/architecture.md) before changing `packages/`; follow [docs/AGENTS.md](docs/AGENTS.md) for documentation.
 
+## Agent skills
+
+### Issue tracker
+
+Track issues and specifications in GitHub Issues. See [issue tracker instructions](docs/agents/issue-tracker.md).
+
+### Triage labels
+
+Use the five canonical triage labels defined in [triage label mapping](docs/agents/triage-labels.md).
+
+### Domain docs
+
+Use a single root context with repository-wide ADRs. See [domain documentation rules](docs/agents/domain.md).
+
 ## Pre-release stance: foundation over blast radius
 
 **Remove this section at the first tagged release.** With no external consumers, prefer the correct foundation over compatibility shims: rename or repackage freely and update every reference together. Backends reject old on-disk formats. SQLite uses monotonic `SCHEMA_VERSION`; `dsh-session` keeps `SESSION_FORMAT_VERSION` at `0` with no compatibility promise.
