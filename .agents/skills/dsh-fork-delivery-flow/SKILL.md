@@ -64,7 +64,13 @@ Review the diff, the check output, and every acceptance item in the issue. A Cod
 
 ### 6. Land on `cnb/main`
 
-Open the merge request against `cnb/main`. Squash, so one issue produces one commit on `main` citing the issue; use a merge commit only when the multi-commit history is itself the deliverable. Delete the feature branch and close the issue after the merge.
+Open the merge request against `cnb/main`. Squash, so one issue produces one commit on `main` citing the issue; use a merge commit only when the multi-commit history is itself the deliverable. Then run the wrap-up script, which deletes the feature branch and closes the issue:
+
+```sh
+.agents/skills/dsh-fork-delivery-flow/scripts/finish-feature.sh <issue> <branch>
+```
+
+It refuses to delete a branch whose content is not on `cnb/main`, and refuses a branch `cnb` no longer has. Otherwise it deletes the branch on `cnb` and on `github` where that remote has it, deletes it locally (switching to `main` first when the branch is checked out), and closes the issue as completed through the `cnb` CLI, printing the issue URL instead of failing when the CLI is missing or the call is rejected. `--dry-run` prints the command sequence without running it.
 
 ### 7. Maintain `cnb/main`
 
@@ -76,7 +82,17 @@ Step 1 merges `cnb/master` into `cnb/main` at each sync point, so the fork keeps
 2. Freeze the release commit on `cnb/main`.
 3. Tag that commit for the sequence being released (`dsh-vX.Y.Z` for the package sequence), matching the version the release scripts read.
 4. Push `cnb/main` to `github/main`, then push the tag.
-5. When the fork holds the publication credentials, run the publication workflow from the tag and verify the published artifacts. Otherwise the fork's release is the pushed tag and `github/main`.
+5. Assert the published state: fetch all three remotes with `--prune`, then check that the mirrors and the published line have not drifted.
+
+```sh
+git fetch origin --prune && git fetch cnb --prune && git fetch github --prune
+test "$(git rev-parse cnb/master)" = "$(git rev-parse origin/master)" \
+  && test "$(git rev-parse github/master)" = "$(git rev-parse origin/master)" \
+  && test "$(git rev-parse github/main)" = "$(git rev-parse cnb/main)" \
+  && printf 'release published: mirrors match origin/master, github/main matches cnb/main\n'
+```
+
+6. When the fork holds the publication credentials, run the publication workflow from the tag and verify the published artifacts. Otherwise the fork's release is the pushed tag and `github/main`.
 
 `git push github main` alone publishes no artifact. `release-publish.yml` is manual-only and reads tags, so a `dsh-v*` tag on a `main` commit is dispatchable without editing the workflow; it publishes only where `secrets.NPM_TOKEN` exists (`release-publish.yml:130`), which this fork does not have, so npm publication is not part of a fork release. Desktop publication is the exception: `desktop-publish.yml:29-30` asserts `GITHUB_REF === 'refs/heads/master'`, so publishing from this fork needs that assertion retargeted to `main`, or a dispatch from `master`.
 
