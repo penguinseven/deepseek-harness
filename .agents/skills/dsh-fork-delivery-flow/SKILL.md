@@ -76,9 +76,9 @@ Step 1 merges `cnb/master` into `cnb/main` at each sync point, so the fork keeps
 2. Freeze the release commit on `cnb/main`.
 3. Tag that commit for the sequence being released (`dsh-vX.Y.Z` for the package sequence), matching the version the release scripts read.
 4. Push `cnb/main` to `github/main`, then push the tag.
-5. Run the publication workflow from the tag and verify the published artifacts.
+5. When the fork holds the publication credentials, run the publication workflow from the tag and verify the published artifacts. Otherwise the fork's release is the pushed tag and `github/main`.
 
-The release workflows select a tag and, for desktop packaging, require `master`; the fork must retarget them to `main` before this step works. `git push github main` alone publishes no artifact.
+`git push github main` alone publishes no artifact. `release-publish.yml` is manual-only and reads tags, so a `dsh-v*` tag on a `main` commit is dispatchable without editing the workflow; it publishes only where `secrets.NPM_TOKEN` exists (`release-publish.yml:130`), which this fork does not have, so npm publication is not part of a fork release. Desktop publication is the exception: `desktop-publish.yml:29-30` asserts `GITHUB_REF === 'refs/heads/master'`, so publishing from this fork needs that assertion retargeted to `main`, or a dispatch from `master`.
 
 ## CodeBuddy delegation contract
 
