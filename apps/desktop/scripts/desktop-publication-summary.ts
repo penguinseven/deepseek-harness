@@ -18,6 +18,13 @@ export interface DesktopPublicationOutcomeSource {
   readonly attempt: string
 }
 
+/** Failure that stops publication before COS, the feed and the tag settle. */
+export interface DesktopPublicationFailure {
+  readonly phase: string
+  readonly code: string
+  readonly message: string
+}
+
 /** Terminal mirror outcome a run summary reports; only `release-mirror-pending` needs a retry. */
 export type DesktopMirrorOutcome =
   | {
@@ -69,6 +76,40 @@ export function desktopPublicationOutcomeSummary(
     ...(feeds.length > 0 ? [`- Feed: ${feeds.map(url => link(url)).join('<br>')}`] : []),
     `- Git tag: ${tag}`,
     `- GitHub Release: ${mirror}`, '',
+  ].join('\n')
+}
+
+/**
+ * Render a failed publication without claiming any write the journal did not confirm.
+ * @param plan Validated upload plan naming the target, version and deployment.
+ * @param selection Routed package identity the publication used.
+ * @param failure Stage, public code and escaped explanation for the failure.
+ * @param preset Packaging preset the bundle declared; only production has a Release to withhold.
+ * @returns Markdown that names the failed phase and the only safe retry.
+ * COS and the feed may hold partial uploads, so this reports their journal state instead of either success or rollback.
+ */
+export function desktopPublicationFailureSummary(
+  plan: DesktopUploadPlan, selection: DesktopPublicationOutcomeSource,
+  failure: DesktopPublicationFailure, preset: 'test' | 'production',
+): string {
+  const origin = new URL(plan.publicUrl).origin
+  const feeds = plan.artifacts.filter(file => file.channelMetadata)
+    .map(file => `${origin}/${file.key.split('/').map(encodeURIComponent).join('/')}`)
+  const tag = plan.environment === 'test' ? '不创建（test 环境）' : '**未确认**（以 journal 为准）'
+  const mirror = preset === 'test' ? '不创建（test 环境）' : '不创建（发布未完成）'
+  return [
+    '', '## Desktop publication', '',
+    '- Status: **failed**',
+    `- Target: ${code(plan.target)} ${code(plan.version)}`,
+    `- Source: run ${code(selection.runId)}, attempt ${code(selection.attempt)}`,
+    `- Phase: ${code(failure.phase)}`,
+    `- Code: ${code(failure.code)}`,
+    `- Message: ${text(failure.message)}`,
+    '- COS + update feed: **未确认**（以 journal 为准；已完成的步骤不会重复写入）',
+    ...(feeds.length > 0 ? [`- Feed 目标: ${feeds.map(url => link(url)).join('<br>')}`] : []),
+    `- Git tag: ${tag}`,
+    `- GitHub Release: ${mirror}`, '',
+    '修复上述原因后，对同一已审批 Artifact 重跑 `publish`；journal 只补齐缺失且内容一致的文件，内容冲突则再次停止。不要重新打包、重新签名或替换 Artifact。', '',
   ].join('\n')
 }
 

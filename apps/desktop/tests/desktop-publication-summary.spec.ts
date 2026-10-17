@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import { expect, it } from 'vitest'
 import type { DesktopArtifactManifest } from '../scripts/desktop-artifact-bundle.ts'
-import { desktopMirrorOutcomeSummary, desktopPublicationOutcomeSummary, desktopPublicationSummary } from '../scripts/desktop-publication-summary.ts'
+import { desktopMirrorOutcomeSummary, desktopPublicationFailureSummary, desktopPublicationOutcomeSummary,
+  desktopPublicationSummary } from '../scripts/desktop-publication-summary.ts'
 import type { DesktopUploadPlan } from '../scripts/desktop-upload-plan.ts'
 
 const manifest: DesktopArtifactManifest = {
@@ -74,6 +75,31 @@ it('reports COS, feed, tag and the separate mirror phase after publication', () 
   const pending = desktopPublicationOutcomeSummary(plan, { runId: '20', attempt: '3' }, 'published-tag-pending', 'production')
   expect(pending).toContain('Git tag: **pending**')
   expect(pending).toContain('COS + update feed: **complete**（Git tag 待补）')
+})
+
+it('reports a failed publication with its phase, cause and safe retry', () => {
+  const summary = desktopPublicationFailureSummary(plan, { runId: '20', attempt: '3' }, {
+    phase: 'remote object reconciliation and publication', code: 'AccessDenied',
+    message: 'AccessDenied (HTTP 403). <script>raw provider output</script>',
+  }, 'production')
+  expect(summary).toContain('Status: **failed**')
+  expect(summary).toContain('remote object reconciliation and publication')
+  expect(summary).toContain('AccessDenied')
+  expect(summary).toContain('HTTP 403')
+  expect(summary).toContain('COS + update feed: **未确认**')
+  expect(summary).toContain('Git tag: **未确认**')
+  expect(summary).toContain('GitHub Release: 不创建（发布未完成）')
+  expect(summary).toContain('重跑 `publish`')
+  expect(summary).not.toContain('<script>')
+  expect(summary).toContain('&#60;script&#62;')
+})
+
+it('withholds the Release for a failed test publication too', () => {
+  const summary = desktopPublicationFailureSummary({ ...plan, environment: 'test' },
+    { runId: '20', attempt: '3' }, { phase: 'channel lock and publication journal acquisition',
+      code: 'EACCES', message: 'EACCES: /fixture/journal' }, 'test')
+  expect(summary).toContain('Git tag: 不创建（test 环境）')
+  expect(summary).toContain('GitHub Release: 不创建（test 环境）')
 })
 
 it('distinguishes a completed mirror from release-mirror-pending', () => {

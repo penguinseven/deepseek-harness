@@ -31,8 +31,8 @@ import { createDesktopPublicationRecord, settleDesktopMirrorRecords, wasDesktopA
 import { desktopReleaseAssets, mirrorDesktopRelease } from './desktop-release-mirror.ts'
 import { publishDesktopRelease } from './desktop-publish.ts'
 import { desktopPublicationFailure } from './desktop-publication-failure.ts'
-import { desktopMirrorOutcomeSummary, desktopPublicationOutcomeSummary, desktopPublicationSummary,
-  type DesktopMirrorOutcome } from './desktop-publication-summary.ts'
+import { desktopMirrorOutcomeSummary, desktopPublicationFailureSummary, desktopPublicationOutcomeSummary,
+  desktopPublicationSummary, type DesktopMirrorOutcome } from './desktop-publication-summary.ts'
 import { publishDesktopTag } from './desktop-publish-tag.ts'
 import { desktopPublishApi, type DesktopArtifactSelection } from './resolve-desktop-artifact-ci.ts'
 
@@ -174,13 +174,15 @@ export function verifyDesktopApprovalEnvironment(
 async function appendPublicationSummary(
   env: NodeJS.ProcessEnv, plan: DesktopUploadPlan, selection: DesktopArtifactSelection,
   status: DesktopPublicationStatus, preset: 'test' | 'production',
-): Promise<void> {
-  if (!env.GITHUB_STEP_SUMMARY) return
+): Promise<boolean> {
+  if (!env.GITHUB_STEP_SUMMARY) return false
   try {
     await appendFile(env.GITHUB_STEP_SUMMARY, desktopPublicationOutcomeSummary(plan, selection, status, preset))
+    return true
   } catch (error) {
     // The release already happened; a summary write must not turn it into a failed publication.
     process.stderr.write(`${JSON.stringify(desktopPublicationFailure(error, 'publication summary'))}\n`)
+    return false
   }
 }
 
@@ -195,23 +197,60 @@ async function appendPublicationSummary(
 async function appendMirrorSummary(
   env: NodeJS.ProcessEnv, plan: DesktopUploadPlan, manifest: DesktopArtifactManifest,
   outcome: DesktopMirrorOutcome,
-): Promise<void> {
-  if (!env.GITHUB_STEP_SUMMARY) return
+): Promise<boolean> {
+  if (!env.GITHUB_STEP_SUMMARY) return false
   try {
     await appendFile(env.GITHUB_STEP_SUMMARY, desktopMirrorOutcomeSummary(plan, manifest, outcome))
+    return true
   } catch (error) {
     process.stderr.write(`${JSON.stringify(desktopPublicationFailure(error, 'mirror summary'))}\n`)
+    return false
+  }
+}
+
+/** Verified inputs a failure summary needs; absent when preparation itself rejected the run. */
+interface DesktopPreparedSummarySource {
+  readonly plan: DesktopUploadPlan
+  readonly selection: DesktopArtifactSelection
+  readonly manifest: DesktopArtifactManifest
+}
+
+/**
+ * Report a failure that happened before its phase wrote a terminal summary.
+ * @param env Actions environment carrying the summary path.
+ * @param mode Invoked mode; only `--publish` and `--mirror` own a reportable phase.
+ * @param prepared Verified plan, selection and manifest, when preparation succeeded.
+ * @param failure Stage, public code and escaped explanation for the failure.
+ * @returns Nothing; a run without a summary path or verified inputs writes none.
+ * The original error stays authoritative: a summary write never replaces it.
+ */
+async function appendFailureSummary(
+  env: NodeJS.ProcessEnv, mode: string | undefined, prepared: DesktopPreparedSummarySource | undefined,
+  failure: { readonly phase: string; readonly code: string; readonly message: string },
+): Promise<void> {
+  if (!env.GITHUB_STEP_SUMMARY || prepared === undefined || (mode !== '--publish' && mode !== '--mirror')) return
+  const body = mode === '--mirror'
+    ? desktopMirrorOutcomeSummary(prepared.plan, prepared.manifest, { status: 'release-mirror-pending', failure })
+    : desktopPublicationFailureSummary(prepared.plan, prepared.selection, failure, prepared.manifest.build.preset)
+  try {
+    await appendFile(env.GITHUB_STEP_SUMMARY, body)
+  } catch (error) {
+    process.stderr.write(`${JSON.stringify(desktopPublicationFailure(error, 'failure summary'))}\n`)
   }
 }
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === import.meta.filename) {
   let phase = 'downloaded package, source and destination verification'
+  const env = process.env
+  let mode: string | undefined
+  let prepared: DesktopPreparedSummarySource | undefined
+  let summarized = false
   try {
-    const mode = process.argv[2]
+    mode = process.argv[2]
     if (process.argv.length !== 3 || (mode !== '--check' && mode !== '--publish' && mode !== '--mirror')) {
       throw new Error('Usage: publish-desktop-ci.ts --check|--publish|--mirror')
     }
-    const env = process.env
     const { selection, bundle, manifest, config, plan, stateRoot, approval } = await prepareDesktopPublication(env)
+    prepared = { plan, selection, manifest }
     verifyDesktopSource(manifest, desktopPublishApi)
     verifyDesktopApprovalEnvironment(manifest, desktopPublishApi)
     if (mode !== '--check' && !env.DESKTOP_APPROVED_PACKAGE) {
@@ -262,7 +301,7 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === import.meta.fi
         status = 'complete'
         const repaired = await settleDesktopMirrorRecords(recordsRoot, {
           repository: manifest.repository, runId: selection.runId, attempt: selection.attempt, destination }, status)
-        await appendMirrorSummary(env, plan, manifest, {
+        summarized = await appendMirrorSummary(env, plan, manifest, {
           status: 'complete', releaseUrl: result.url,
           uploaded: result.uploaded.length, present: result.present.length, repaired,
         })
@@ -270,7 +309,7 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === import.meta.fi
         const failure = desktopPublicationFailure(error, phase)
         await record.record({ type: 'mirror-pending', failure })
         status = 'release-mirror-pending'
-        await appendMirrorSummary(env, plan, manifest, { status: 'release-mirror-pending', failure })
+        summarized = await appendMirrorSummary(env, plan, manifest, { status: 'release-mirror-pending', failure })
         throw error
       } finally { await record.finish(status) }
     } else {
@@ -320,7 +359,7 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === import.meta.fi
             process.exitCode = 1
           }
           // The publication journal owns COS, the feeds and the tag; the Release is a later, separate phase.
-          await appendPublicationSummary(env, plan, selection, status, manifest.build.preset)
+          summarized = await appendPublicationSummary(env, plan, selection, status, manifest.build.preset)
         } catch (error) {
           await journal.record({ type: 'failed', failure: desktopPublicationFailure(error, phase) })
           throw error
@@ -328,7 +367,9 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === import.meta.fi
       })
     }
   } catch (error) {
-    process.stderr.write(`${JSON.stringify(desktopPublicationFailure(error, phase))}\n`)
+    const failure = desktopPublicationFailure(error, phase)
+    if (!summarized) await appendFailureSummary(env, mode, prepared, failure)
+    process.stderr.write(`${JSON.stringify(failure)}\n`)
     process.exitCode = 1
   }
 }
