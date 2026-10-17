@@ -43,7 +43,7 @@ export function macOSCachePolicy(probe: string):
     const desired = entitlementBytes === undefined ? {} : plist(entitlementBytes.toString('utf8'))
     return {
       policy: JSON.stringify({ certificate, identifier, expected, entitlements: entitlementBytes?.toString('base64') ?? null, tools, os: release() }),
-      sign: path => signMacOSRuntimeCode(path, identifier, expected, entitlements),
+      sign: path => signMacOSRuntimeCode(path, identifier, { mode: 'developer-id', expected }, entitlements),
       verify: (path) => {
         if (!['cefaedfe', 'cffaedfe', 'feedface', 'feedfacf'].includes(readFileSync(path).subarray(0, 4).toString('hex'))) {
           throw new Error('macOS signature cache: only thin Mach-O files can be reused')

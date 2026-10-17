@@ -5,12 +5,22 @@ import { closeSync, openSync, readdirSync, readSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { primaryRuntimePythonAliases, readPrimaryRuntime } from '../../../packages/skill/tool-workspace-dependencies/src/index.ts'
 import { inventoryDesktopRuntime } from '../src/runtime-tree.ts'
-import type { MacOSSigningEnvironment } from './desktop-release-environment.mjs'
 import { cachedMacOSSignature, pruneMacOSSignatureCache } from './macos-signature-cache.ts'
 import { macOSCachePolicy } from './macos-cache-policy.ts'
-import { signMacOSRuntimeCode, verifyMacOSRuntimeCode } from './verify-macos-signature.mjs'
+import { signMacOSRuntimeCode, verifyMacOSRuntimeCode, type MacOSRuntimeSigning } from './verify-macos-signature.mjs'
+import { resolveMacOSSigningEnvironment } from './desktop-release-environment.mjs'
 
 const MACH_O_MAGICS = new Set(['cafebabe', 'cafebabf', 'cefaedfe', 'cffaedfe', 'feedface', 'feedfacf', 'bebafeca', 'bfbafeca'])
+
+/**
+ * Select the runtime signing identity: the explicit hosted ad-hoc mode, otherwise the Developer ID release identity.
+ * @param env - Packaging environment.
+ * @returns Certificate-free ad-hoc signing or the resolved Developer ID identity.
+ */
+export function resolveMacOSRuntimeSigning(env: NodeJS.ProcessEnv): MacOSRuntimeSigning {
+  if (env.DSH_DESKTOP_AD_HOC_SIGNING === '1') return { mode: 'ad-hoc' }
+  return { mode: 'developer-id', expected: resolveMacOSSigningEnvironment(env) }
+}
 
 function magic(path: string): string {
   const descriptor = openSync(path, 'r')
@@ -36,14 +46,14 @@ async function primaryRuntimeFiles(root: string): Promise<string[]> {
  * Sign and verify every materialized Mach-O file, awaiting all signers on failure.
  * @param root - Self-contained production runtime.
  * @param appId - Release application identifier.
- * @param expected - Required signing identity.
+ * @param signing - Release identity or the certificate-free ad-hoc identity.
  * @param arch - Target runtime architecture, independent of the signing host.
  * @param cacheDirectory - Optional content-addressed cache; requires the keychain-owned signing probe.
  * @param kind - Primary payloads admit validated Python aliases; Desktop application runtimes reject every link.
  * @returns Number of signed native files.
  */
 export async function signMacOSRuntime(
-  root: string, appId: string, expected: MacOSSigningEnvironment, arch: 'arm64' | 'x64', cacheDirectory?: string,
+  root: string, appId: string, signing: MacOSRuntimeSigning, arch: 'arm64' | 'x64', cacheDirectory?: string,
   kind: 'desktop' | 'primary' = 'desktop',
 ): Promise<number> {
   const inventory = kind === 'primary' ? await primaryRuntimeFiles(root) : inventoryDesktopRuntime(root).map(file => file.path)
@@ -65,12 +75,12 @@ export async function signMacOSRuntime(
       const entitlements = needsJit ? join(import.meta.dirname, entitlementsFile) : undefined
       const file = join(root, path)
       const thin = ['cefaedfe', 'cffaedfe', 'feedface', 'feedfacf'].includes(magic(file))
-      if (cacheDirectory !== undefined && policy !== undefined && thin) {
-        if (await cachedMacOSSignature(file, cacheDirectory, policy(identifier, expected, entitlements))) hits++
+      if (signing.mode === 'developer-id' && cacheDirectory !== undefined && policy !== undefined && thin) {
+        if (await cachedMacOSSignature(file, cacheDirectory, policy(identifier, signing.expected, entitlements))) hits++
         else misses++
       } else {
-        await signMacOSRuntimeCode(file, identifier, expected, entitlements)
-        verifyMacOSRuntimeCode(file, expected)
+        await signMacOSRuntimeCode(file, identifier, signing, entitlements)
+        verifyMacOSRuntimeCode(file, signing)
       }
     }
   })

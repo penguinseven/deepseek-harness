@@ -1,5 +1,10 @@
 import type { MacOSSigningEnvironment } from './desktop-release-environment.mjs'
 
+/** Certificate-backed release signing or the ad-hoc identity available to hosted builds. */
+export type MacOSRuntimeSigning =
+  | { readonly mode: 'developer-id', readonly expected: MacOSSigningEnvironment }
+  | { readonly mode: 'ad-hoc' }
+
 /**
  * Reject signature metadata that does not name the company release authority and team.
  * @param details - Output from `codesign --display --verbose=4`.
@@ -15,26 +20,32 @@ export function assertMacOSSignatureDetails(details: string, expected: MacOSSign
 export function assertMacOSRuntimeSignatureDetails(details: string, expected: MacOSSigningEnvironment): void
 
 /**
- * Sign one Mach-O file using the packaging-owned CSC_KEYCHAIN; missing setup rejects before signing.
+ * Require the ad-hoc, hardened-runtime signature used by hosted builds without certificates.
+ * @param details - Output from `codesign --display --verbose=4`.
+ */
+export function assertMacOSAdHocRuntimeSignatureDetails(details: string): void
+
+/**
+ * Sign one Mach-O file with the selected identity; Developer ID signing requires the packaging-owned CSC_KEYCHAIN.
  * @param path - Writable standalone Mach-O file.
  * @param identifier - Stable code-signing identifier derived from the release app ID and CAS digest.
- * @param expected - Public release identity.
+ * @param signing - Release identity or the certificate-free ad-hoc identity.
  * @param entitlements - Optional entitlement plist for this executable.
  * @returns Resolves after codesign exits successfully.
  */
 export function signMacOSRuntimeCode(
   path: string,
   identifier: string,
-  expected: MacOSSigningEnvironment,
+  signing: MacOSRuntimeSigning,
   entitlements?: string,
 ): Promise<void>
 
 /**
  * Verify one Mach-O file embedded in the runtime tree.
  * @param path - Mach-O file to inspect.
- * @param expected - Public release identity.
+ * @param signing - Release identity or the certificate-free ad-hoc identity.
  */
-export function verifyMacOSRuntimeCode(path: string, expected: MacOSSigningEnvironment): void
+export function verifyMacOSRuntimeCode(path: string, signing: MacOSRuntimeSigning): void
 
 /**
  * Verify the full application signature and its release owner.

@@ -1,4 +1,4 @@
-/** Sign runtime code and verify that packaged macOS artifacts carry the company release identity. */
+/** Sign runtime code and verify that packaged macOS artifacts carry the requested release or ad-hoc identity. */
 
 import { spawn, spawnSync } from 'node:child_process'
 import { resolve } from 'node:path'
@@ -33,7 +33,35 @@ export function assertMacOSRuntimeSignatureDetails(details, expected) {
   if (!fields.some(line => /^Timestamp=.+/u.test(line))) {
     throw new Error('desktop macOS signing: runtime signature has no secure timestamp')
   }
-  if (!fields.some(line => /\bflags=0x[0-9a-f]+\(runtime\)(?:\s|$)/iu.test(line))) {
+  assertHardenedRuntime(details)
+}
+
+/**
+ * Require the properties of an ad-hoc runtime signature used by hosted builds without certificates.
+ * @param {string} details - Output from `codesign --display --verbose=4`.
+ * @returns {void}
+ */
+export function assertMacOSAdHocRuntimeSignatureDetails(details) {
+  const fields = new Set(details.split(/\r?\n/u).map(line => line.trim()))
+  if (!fields.has('Signature=adhoc')) {
+    throw new Error('desktop macOS signing: runtime signature is not ad-hoc')
+  }
+  if ([...fields].some(line => line.startsWith('Authority=') || /^TeamIdentifier=[A-Z0-9]{10}$/u.test(line))) {
+    throw new Error('desktop macOS signing: ad-hoc runtime signature carries a release authority')
+  }
+  if ([...fields].some(line => line.startsWith('Timestamp='))) {
+    throw new Error('desktop macOS signing: ad-hoc runtime signature must not carry a secure timestamp')
+  }
+  assertHardenedRuntime(details)
+}
+
+/**
+ * Require the hardened-runtime flag that every macOS runtime signature uses.
+ * @param {string} details - Output from `codesign --display --verbose=4`.
+ * @returns {void}
+ */
+function assertHardenedRuntime(details) {
+  if (!details.split(/\r?\n/u).some(line => /\bflags=0x[0-9a-f]+\([^)]*\bruntime\b[^)]*\)(?:\s|$)/iu.test(line.trim()))) {
     throw new Error('desktop macOS signing: runtime signature does not enable hardened runtime')
   }
 }
@@ -107,22 +135,25 @@ function runCodeSign(args) {
 }
 
 /**
- * Sign one Mach-O file using the packaging-owned CSC_KEYCHAIN; missing setup rejects before signing.
+ * Sign one Mach-O file with the selected identity; Developer ID signing requires the packaging-owned CSC_KEYCHAIN.
  * @param {string} path - Writable standalone Mach-O file.
  * @param {string} identifier - Stable code-signing identifier derived from the release app ID and CAS digest.
- * @param {{ signingIdentity: string, teamId: string }} expected - Public release identity.
+ * @param {{ mode: 'developer-id', expected: { signingIdentity: string, teamId: string } } | { mode: 'ad-hoc' }} signing - Release identity or the certificate-free ad-hoc identity.
  * @param {string | undefined} entitlements - Optional entitlement plist for this executable.
  * @returns {Promise<void>} Resolves after codesign exits successfully.
  */
-export async function signMacOSRuntimeCode(path, identifier, expected, entitlements) {
-  const keychain = process.env.CSC_KEYCHAIN
-  if (!keychain) throw new Error('desktop macOS signing: run through the package command to prepare the signing keychain')
+export async function signMacOSRuntimeCode(path, identifier, signing, entitlements) {
+  const identity = signing.mode === 'ad-hoc' ? '-' : signing.expected.signingIdentity
+  const keychain = signing.mode === 'ad-hoc' ? undefined : process.env.CSC_KEYCHAIN
+  if (signing.mode === 'developer-id' && !keychain) {
+    throw new Error('desktop macOS signing: run through the package command to prepare the signing keychain')
+  }
   await runAppleCommandAsync('/usr/bin/codesign', [
     '--force',
-    '--sign', expected.signingIdentity,
-    '--keychain', keychain,
+    '--sign', identity,
+    ...(keychain === undefined ? [] : ['--keychain', keychain]),
     '--identifier', identifier,
-    '--timestamp',
+    ...(signing.mode === 'ad-hoc' ? [] : ['--timestamp']),
     '--options', 'runtime',
     ...(entitlements === undefined ? [] : ['--entitlements', entitlements]),
     path,
@@ -132,13 +163,14 @@ export async function signMacOSRuntimeCode(path, identifier, expected, entitleme
 /**
  * Verify one Mach-O file embedded in the runtime tree.
  * @param {string} path - Mach-O file to inspect.
- * @param {{ signingIdentity: string, teamId: string }} expected - Public release identity.
+ * @param {{ mode: 'developer-id', expected: { signingIdentity: string, teamId: string } } | { mode: 'ad-hoc' }} signing - Release identity or the certificate-free ad-hoc identity.
  * @returns {void}
  */
-export function verifyMacOSRuntimeCode(path, expected) {
+export function verifyMacOSRuntimeCode(path, signing) {
   runCodeSign(['--verify', '--strict', '--verbose=2', path])
   const details = runCodeSign(['--display', '--verbose=4', path])
-  assertMacOSRuntimeSignatureDetails(details, expected)
+  if (signing.mode === 'ad-hoc') assertMacOSAdHocRuntimeSignatureDetails(details)
+  else assertMacOSRuntimeSignatureDetails(details, signing.expected)
 }
 
 /**

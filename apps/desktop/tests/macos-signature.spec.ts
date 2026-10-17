@@ -9,6 +9,7 @@ import {
 } from '../scripts/desktop-release-environment.mjs'
 import { notarizeMacOSDiskImageArtifact } from '../scripts/notarize-macos-disk-images.mjs'
 import {
+  assertMacOSAdHocRuntimeSignatureDetails,
   assertMacOSRuntimeSignatureDetails,
   assertMacOSSignatureDetails,
 } from '../scripts/verify-macos-signature.mjs'
@@ -207,6 +208,27 @@ describe('desktop macOS release signature', () => {
     expect(() => {
       assertMacOSRuntimeSignatureDetails(details.replace('flags=0x10000(runtime)', 'flags=0x0(none)'), expected)
     }).toThrow(/hardened runtime/u)
+  })
+
+  it('requires an ad-hoc runtime signature without release authority or timestamp', () => {
+    const details = [
+      'Identifier=com.example.desktop.runtime.abc',
+      'CodeDirectory v=20400 size=773 flags=0x10002(adhoc,runtime) hashes=13+7 location=embedded',
+      'Signature=adhoc',
+    ].join('\n')
+    expect(() => { assertMacOSAdHocRuntimeSignatureDetails(details) }).not.toThrow()
+    expect(() => {
+      assertMacOSAdHocRuntimeSignatureDetails(details.replace('Signature=adhoc', 'Signature=Developer ID'))
+    }).toThrow(/not ad-hoc/u)
+    expect(() => {
+      assertMacOSAdHocRuntimeSignatureDetails(details.replace('flags=0x10002(adhoc,runtime)', 'flags=0x2(adhoc)'))
+    }).toThrow(/hardened runtime/u)
+    expect(() => {
+      assertMacOSAdHocRuntimeSignatureDetails(details + '\nAuthority=Developer ID Application: Other (TEAMID1234)')
+    }).toThrow(/release authority/u)
+    expect(() => {
+      assertMacOSAdHocRuntimeSignatureDetails(details + '\nTimestamp=31 Aug 2026 at 20:00:00')
+    }).toThrow(/must not carry a secure timestamp/u)
   })
 
   it('rejects another developer identity', () => {

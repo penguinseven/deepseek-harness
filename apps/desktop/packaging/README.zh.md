@@ -122,7 +122,7 @@ macOS 正式发布和本地未签名 DMG 都通过 [electron-builder 配置](../
 
 工作流选项 `skip_notarization` 默认为 `false`；对应 CLI 参数是 `--skip-notarization`。在签名机上，该模式保留 Developer ID 签名、DMG 签名验证和打包运行时验证，跳过 Apple 公证和 stapling，不要求 Apple 公证凭据。DMG／ZIP 文件名带 `-unnotarized`，存放于 `.desktop-build/targets/<target>/unnotarized-artifacts/`，上传产物标为 `unnotarized-debug`。这些产物仅供内部调试：Gatekeeper 可能阻止下载副本运行，不能视为可分发包或用于更新发布。该模式不写入发布完成记录，不能与未签名、Windows 或仅准备构建组合。
 
-托管 macOS 打包选择同一个 `skip_notarization` 输入，但托管 runner 没有证书，因此工作流追加 `--ad-hoc-signing`。该模式使用 macOS 的 ad-hoc 身份（`-`）签名，保留 hardened runtime 与强制签名，并产出分发目录布局：`.desktop-build/targets/<target>/artifacts/deepseek-harness-<version>-mac-<arch>.dmg`。它的 `presets/test.env` 与 `publishing/test.json` 由 `apps/desktop/scripts/hosted-config-command.ts` 依据仓库内的公开值（测试源站、其 COS 桶、本次 dispatch 的 release ID）生成，不读取任何密钥文件，因为 ad-hoc 构建既无 Developer ID 身份也无 Apple 账号。`--ad-hoc-signing` 只能在带 `--skip-notarization` 的 macOS 目标上使用，并拒绝 `--unsigned` 与 `--prepare-only`。若跳过公证但仍配置了 `CSC_LINK`，则保留 Developer ID 路径及其身份与密码校验。
+托管 macOS 打包选择同一个 `skip_notarization` 输入，但托管 runner 没有证书，因此工作流追加 `--ad-hoc-signing`。该模式使用 macOS 的 ad-hoc 身份（`-`）签名预先准备的运行时原生文件与整个应用，保留 hardened runtime 与强制签名，并产出分发目录布局：`.desktop-build/targets/<target>/artifacts/deepseek-harness-<version>-mac-<arch>.dmg`。它的 `presets/test.env` 与 `publishing/test.json` 由 `apps/desktop/scripts/hosted-config-command.ts` 依据仓库内的公开值（测试源站、其 COS 桶、本次 dispatch 的 release ID）生成，不读取任何密钥文件，因为 ad-hoc 构建既无 Developer ID 身份也无 Apple 账号。`--ad-hoc-signing` 只能在带 `--skip-notarization` 的 macOS 目标上使用，并拒绝 `--unsigned` 与 `--prepare-only`。若跳过公证但仍配置了 `CSC_LINK`，则保留 Developer ID 路径及其身份与密码校验。
 
 在 checkout 中，以注册 runner 的同一账户安装用户服务，不使用 `sudo`：
 
