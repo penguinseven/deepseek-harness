@@ -22,7 +22,7 @@ description: "在托管 runner 上从不可变的打包产物包发布 Desktop �
 
 ## 机器配置
 
-每次打包运行生成一个不可变的产物包（Artifact bundle），并以 `desktop-<target>-<qualification>-<version>-<run-id>-<attempt>` 上传，其中 target 为 `win-x64` 或 `mac-arm64`，qualification 为 `signed`、`unsigned`、`notarized` 或 `unnotarized`。产物包在 `manifest.json` 之外包含三个目录：`release/` 存放安装包、更新归档、blockmap、清单 YAML 和发布记录；`verification/` 存放平台证据；`publication/` 存放仅供审计、从不上传到 COS 的打包记录。manifest 记录源码 ref 与 commit、构建标识、Actions 标识、每个发布文件的大小、SHA-256 与 SHA-512，以及平台校验标志。发布下载该产物包；manifest 中的 `runnerName` 只是审计数据，不再指定发布机器。
+每次打包运行生成一个不可变的产物包（Artifact bundle），并以 `desktop-<target>-<qualification>-<version>-<run-id>-<attempt>` 上传，其中 target 为 `win-x64` 或 `mac-arm64`，qualification 为 `signed`、`unsigned`、`notarized` 或 `unnotarized`。产物包在 `manifest.json` 之外包含三个目录：`release/` 存放安装包、更新归档、blockmap、清单 YAML 和发布记录；`verification/` 存放平台证据；`publication/` 存放仅供审计、从不上传到 COS 的打包记录。GitHub 打包 Artifact 时会丢弃空目录，因此 unsigned / unnotarized 产物包下载后没有 `verification/`，必须按所有平台校验标志为 false 通过校验。manifest 记录源码 ref 与 commit、构建标识、Actions 标识、每个发布文件的大小、SHA-256 与 SHA-512，以及平台校验标志。发布下载该产物包；manifest 中的 `runnerName` 只是审计数据，不再指定发布机器。
 
 GitHub 将已签名和已公证的产物包保留 90 天，未签名或未公证的产物包保留 30 天；打包日志仍保留 14 天。已签名的 Windows 产物包带有 `windows-authenticode` 和 `windows-timestamp` 证据，已公证的 macOS 产物包带有 `macos-codesign` 和 `macos-notarization`。每个证据文件列出其覆盖的发布文件及其 SHA-256，托管发布 runner 由此把打包字节绑定到打包机器的原生校验结果，而不必重复校验：字节变动会导致校验失败，需要重新打包并获得新的 attempt。
 
