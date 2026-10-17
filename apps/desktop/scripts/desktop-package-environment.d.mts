@@ -13,25 +13,25 @@ export function localMacOSPackageEnvironment(environment?: NodeJS.ProcessEnv): N
  * @param platform Target platform.
  * @param environment Parent environment, retained only for unrelated build tools.
  * @param appRoot Desktop application directory; relative credential paths resolve here.
- * @param options Unsigned presets and Windows preparation-only presets never read signing credentials. An explicit macOS notarization skip declares a build macOS signs ad hoc: it reads no signing secret file and no Apple account.
+ * @param options Unsigned presets and Windows preparation-only presets never read signing credentials. An explicit macOS ad-hoc build reads no signing secret file and no Apple account; skipping notarization alone still reads Developer ID settings.
  * @returns Isolated environment with file-owned release settings.
  */
 export function loadDesktopPackageEnvironment(
   platform: 'win32' | 'darwin',
   environment?: NodeJS.ProcessEnv,
   appRoot?: string,
-  options?: { unsigned?: boolean, prepareOnly?: boolean, skipNotarization?: boolean },
+  options?: { unsigned?: boolean, prepareOnly?: boolean, skipNotarization?: boolean, adHocSigning?: boolean },
 ): NodeJS.ProcessEnv
 
 /**
  * Validate the packaging mode before preparation without invoking a token or Apple's services.
  * @param environment Selected local defaults or file-owned release settings.
  * @param target Selected release target.
- * @param options Explicit packaging mode; a skipNotarization build carries no certificate or Apple account.
+ * @param options Explicit packaging mode; an adHocSigning build carries no certificate or Apple account, while a skipNotarization build alone still requires Developer ID signing.
  * @returns Nothing.
  */
 export function validateDesktopPackageEnvironment(
   environment: NodeJS.ProcessEnv,
   target: { platform: 'win32' | 'darwin', arch: string },
-  options?: { unsigned?: boolean, prepareOnly?: boolean, skipNotarization?: boolean },
+  options?: { unsigned?: boolean, prepareOnly?: boolean, skipNotarization?: boolean, adHocSigning?: boolean },
 ): void

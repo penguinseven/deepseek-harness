@@ -78,11 +78,12 @@ it('records debugging artifact paths only for an explicit CI selection without n
     ].join('\n'))
     const output = join(root, 'output')
     const summary = join(root, 'summary')
-    const run = (skip: string) => spawnSync(process.execPath,
+    const run = (skip: string, extra: NodeJS.ProcessEnv = {}) => spawnSync(process.execPath,
       [join(import.meta.dirname, '../scripts/prepare-macos-ci.mjs')], { encoding: 'utf8', env: {
         ...process.env, DSH_PACKAGING_CONFIG_DIR: root, DSH_PACKAGING_PRESET: 'test',
-        PACKAGE_SKIP_NOTARIZATION: skip, PACKAGE_BUILD_VERSION: 'auto',
+        PACKAGE_HOSTED: 'false', PACKAGE_SKIP_NOTARIZATION: skip, PACKAGE_BUILD_VERSION: 'auto',
         GITHUB_RUN_NUMBER: '1', GITHUB_RUN_ATTEMPT: '1', GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary,
+        ...extra,
       } })
     const missingCredentials = run('false')
     expect(missingCredentials.status).toBe(1)
@@ -95,6 +96,18 @@ it('records debugging artifact paths only for an explicit CI selection without n
     expect(debugging.status).toBe(0)
     expect(await readFile(output, 'utf8')).toContain('artifacts=unnotarized-artifacts\nmode=unnotarized-debug\n')
     expect(await readFile(summary, 'utf8')).toContain('Internal debugging only')
+    await rm(join(root, 'secrets'), { recursive: true })
+    const missingMachineSigning = run('true')
+    expect(missingMachineSigning.status).toBe(1)
+    expect(missingMachineSigning.stderr).toContain('cannot read')
+    const hosted = run('true', { PACKAGE_HOSTED: 'true' })
+    expect(hosted.stderr).toBe('')
+    expect(hosted.status).toBe(0)
+    expect(await readFile(output, 'utf8')).toContain('artifacts=artifacts\nmode=unnotarized-ad-hoc\n')
+    expect(await readFile(summary, 'utf8')).toContain('ad-hoc signed but NOT notarized')
+    const hostedWithNotarization = run('false', { PACKAGE_HOSTED: 'true' })
+    expect(hostedWithNotarization.status).toBe(1)
+    expect(hostedWithNotarization.stderr).toContain('Hosted macOS packaging requires skipped notarization')
   } finally {
     await rm(root, { recursive: true, force: true })
   }

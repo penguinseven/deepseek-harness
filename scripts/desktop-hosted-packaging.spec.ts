@@ -84,7 +84,7 @@ it('materializes a credential-free configuration that both hosted platforms acce
     const selection = { DSH_PACKAGING_PRESET: 'test', DSH_PACKAGING_CONFIG_DIR: hosted.configRoot }
     const windows = loadDesktopPackageEnvironment('win32', selection, root, { unsigned: true })
     expect(windows.DSH_DESKTOP_WINDOWS_CER_FILE).toBeUndefined()
-    const macos = loadDesktopPackageEnvironment('darwin', selection, root, { skipNotarization: true })
+    const macos = loadDesktopPackageEnvironment('darwin', selection, root, { skipNotarization: true, adHocSigning: true })
     expect(macos.CSC_LINK).toBeUndefined()
     expect(macos.APPLE_API_KEY).toBeUndefined()
     // The hosted destination is verifiable without any credential, which is all a hosted job may do.

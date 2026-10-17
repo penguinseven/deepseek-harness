@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -238,7 +238,7 @@ it('rejects an explicit invalid macOS cache before signing while leaving unsigne
   expect(() => { validateDesktopPackageEnvironment(environment, MACOS, { unsigned: true }) }).not.toThrow()
 })
 
-it('requires signing material for an unnotarized Developer ID build and none for an ad-hoc build', async () => {
+it('requires Developer ID material for a skipped-notarization build and none for an explicit ad-hoc build', async () => {
   await withDirectory(async (directory) => {
     const certificate = join(directory, 'signing.p12')
     await writeFile(certificate, 'fixture')
@@ -248,14 +248,41 @@ it('requires signing material for an unnotarized Developer ID build and none for
     expect(() => {
       validateDesktopPackageEnvironment({ ...environment, CSC_KEY_PASSWORD: undefined }, MACOS, { skipNotarization: true })
     }).toThrow(/CSC_KEY_PASSWORD/u)
-    // Without a certificate the build is ad hoc: no Apple account, no p12, no Developer ID identity.
+    // Skipping notarization alone still reads the Developer ID machine settings.
     expect(() => {
       validateDesktopPackageEnvironment({ ...RELEASE }, MACOS, { skipNotarization: true })
+    }).toThrow(/DSH_DESKTOP_MACOS_SIGNING_IDENTITY/u)
+    // Only an explicit ad-hoc build declares no certificate, identity or Apple account.
+    expect(() => {
+      validateDesktopPackageEnvironment({ ...RELEASE }, MACOS, { skipNotarization: true, adHocSigning: true })
     }).not.toThrow()
+    expect(() => {
+      validateDesktopPackageEnvironment({ ...RELEASE }, MACOS, { adHocSigning: true })
+    }).toThrow(/requires the macOS --skip-notarization build/u)
     // A present certificate needs the Developer ID identity and its export password, so a half-configured
     // signing machine fails loudly instead of silently producing an ad-hoc build.
     expect(() => {
       validateDesktopPackageEnvironment({ ...RELEASE, CSC_LINK: certificate }, MACOS, { skipNotarization: true })
     }).toThrow(/DSH_DESKTOP_MACOS_SIGNING_IDENTITY/u)
+  })
+})
+
+it('reads no machine signing file for an explicit ad-hoc preset build', async () => {
+  await withDirectory(async (directory) => {
+    await mkdir(join(directory, 'presets'))
+    await writeFile(join(directory, 'presets/test.env'), [
+      'DSH_DESKTOP_APP_ID=com.example.desktop', 'DSH_DESKTOP_AUTO_UPDATE_ENV=test',
+      'DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://policy.example.com',
+      'DSH_DESKTOP_MANDATORY_UPDATE_CONFIG={"allowedAuthOrigins":["https://login.example.com"]}',
+      'DOWNLOAD_TEST_ORIGIN=https://updates.example.com', 'DOWNLOAD_TEST_RELEASE_ID=0123456789abcdef0123456789abcdef',
+    ].join('\n'))
+    const environment = { DSH_PACKAGING_PRESET: 'test', DSH_PACKAGING_CONFIG_DIR: directory }
+    expect(() => loadDesktopPackageEnvironment('darwin', environment, directory, { skipNotarization: true }))
+      .toThrow(/cannot read/u)
+    const adHoc = loadDesktopPackageEnvironment('darwin', environment, directory, { skipNotarization: true, adHocSigning: true })
+    expect(adHoc.CSC_LINK).toBeUndefined()
+    expect(() => {
+      validateDesktopPackageEnvironment(adHoc, MACOS, { skipNotarization: true, adHocSigning: true })
+    }).not.toThrow()
   })
 })

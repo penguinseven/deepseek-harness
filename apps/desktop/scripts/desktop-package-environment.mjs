@@ -41,10 +41,13 @@ export function localMacOSPackageEnvironment(environment = process.env) {
  * @param {'win32' | 'darwin'} platform Target platform.
  * @param {NodeJS.ProcessEnv} environment Parent environment, retained only for unrelated build tools.
  * @param {string} appRoot Desktop application directory; relative credential paths resolve here.
- * @param {{ unsigned?: boolean, prepareOnly?: boolean, skipNotarization?: boolean }} options Unsigned presets and Windows preparation-only presets never read signing credentials. An explicit macOS notarization skip declares a build macOS signs ad hoc: it reads no signing secret file and no Apple account.
+ * @param {{ unsigned?: boolean, prepareOnly?: boolean, skipNotarization?: boolean, adHocSigning?: boolean }} options Unsigned presets and Windows preparation-only presets never read signing credentials. An explicit macOS ad-hoc build reads no signing secret file and no Apple account; skipping notarization alone still reads Developer ID settings.
  * @returns {NodeJS.ProcessEnv} Isolated environment with file-owned release settings.
  */
 export function loadDesktopPackageEnvironment(platform, environment = process.env, appRoot = APP_ROOT, options = {}) {
+  if (options.adHocSigning && (platform !== 'darwin' || options.skipNotarization !== true)) {
+    throw new Error('desktop package: ad-hoc signing requires the macOS --skip-notarization build')
+  }
   const preset = environment.DSH_PACKAGING_PRESET
   let path = join(appRoot, platform === 'win32' ? '.env.windows' : '.env.macos')
   if (preset !== undefined) {
@@ -57,8 +60,8 @@ export function loadDesktopPackageEnvironment(platform, environment = process.en
   const publicPlatformSetting = platform === 'win32'
     ? /^DSH_DESKTOP_WINDOWS_SIGNATURE_CACHE_(?:DIR|CONCURRENCY)$/u
     : /^DSH_DESKTOP_MACOS_(?:SIGNATURE_CACHE_DIR|PACK_CONCURRENCY|DOWNLOAD_PROXY|NOTARIZATION_PROXY)$/u
-  // An explicit macOS notarization skip uses a release identity without a Developer ID certificate.
-  const adHocMacOS = platform !== 'win32' && options.skipNotarization === true
+  // An explicit ad-hoc macOS build carries no Developer ID certificate or Apple account.
+  const adHocMacOS = platform === 'darwin' && options.adHocSigning === true
   const settings = readSettings(path, name => preset === undefined
     ? SHARED_SETTING.test(name) || (adHocMacOS ? MACOS_AD_HOC_SETTING.test(name) : platformSetting.test(name))
     : /^(?:DSH_DESKTOP_(?:APP_ID|AUTO_UPDATE_ENV|NPM_REGISTRY|MANDATORY_UPDATE_(?:CONFIG|(?:TEST|PROD)_ORIGIN))|DOWNLOAD_TEST_(?:ORIGIN|RELEASE_ID))$/u.test(name)
@@ -66,7 +69,7 @@ export function loadDesktopPackageEnvironment(platform, environment = process.en
       || (adHocMacOS && MACOS_SETTING.test(name) && !publicPlatformSetting.test(name)))
   if (preset !== undefined) {
     if (settings.DSH_DESKTOP_AUTO_UPDATE_ENV !== preset) throw new Error('desktop package: preset deployment must match its name')
-    // A skipped notarization declares a build without release signing material, so no machine secret file is read.
+    // An ad-hoc build has no release signing material, so no machine secret file is read.
     if (!adHocMacOS && !options.unsigned && (platform === 'darwin' || !options.prepareOnly)) {
       const filename = platform === 'win32' ? 'windows-signing.env' : 'macos-signing.env'
       Object.assign(settings, readSettings(join(dirname(dirname(path)), 'secrets', filename),
@@ -137,10 +140,13 @@ function requireReadableFile(environment, name) {
  * Validate the packaging mode before preparation without invoking a token or Apple's services.
  * @param {NodeJS.ProcessEnv} environment Selected local defaults or file-owned release settings.
  * @param {{ platform: 'win32' | 'darwin', arch: string }} target Selected release target.
- * @param {{ unsigned?: boolean, prepareOnly?: boolean, skipNotarization?: boolean }} options Explicit packaging mode.
+ * @param {{ unsigned?: boolean, prepareOnly?: boolean, skipNotarization?: boolean, adHocSigning?: boolean }} options Explicit packaging mode. An ad-hoc build carries no Developer ID or Apple account material; skipping notarization alone still requires Developer ID signing.
  * @returns {void}
  */
 export function validateDesktopPackageEnvironment(environment, target, options = {}) {
+  if (options.adHocSigning && (target.platform !== 'darwin' || options.skipNotarization !== true)) {
+    throw new Error('desktop package: ad-hoc signing requires the macOS --skip-notarization build')
+  }
   resolveDesktopAppId(environment)
   resolveNpmRegistry(environment)
   if (target.platform !== 'darwin' || !options.unsigned) resolveDesktopPolicyEnvironment(environment)
@@ -158,8 +164,8 @@ export function validateDesktopPackageEnvironment(environment, target, options =
     if (!options.prepareOnly) resolveWindowsSignatureCacheDirectory(environment)
   } else {
     if (environment.DSH_DESKTOP_MACOS_SIGNATURE_CACHE_DIR !== undefined) validateMacOSSignatureCacheDirectory(environment.DSH_DESKTOP_MACOS_SIGNATURE_CACHE_DIR)
-    // A certificate-free skip declares a macOS ad-hoc build, which carries no Developer ID material at all.
-    if (options.skipNotarization && environment.CSC_LINK === undefined) return
+    // An ad-hoc build carries no Developer ID material at all.
+    if (options.adHocSigning) return
     resolveMacOSSigningEnvironment(environment)
     if (options.skipNotarization) {
       verifyMacOSCertificatePassword(environment)

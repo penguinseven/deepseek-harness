@@ -354,6 +354,7 @@ async function main(): Promise<void> {
     ? localMacOSPackageEnvironment()
     : loadDesktopPackageEnvironment(target.platform, process.env, APP_ROOT, {
       unsigned: invocation.unsigned, prepareOnly: invocation.prepareOnly,
+      skipNotarization: invocation.skipNotarization, adHocSigning: invocation.adHocSigning,
     })
   const productVersion = packageVersion(join(APP_ROOT, 'package.json'), 'desktop package')
   // Release settings come from the selected configuration files, so the version this run publishes is an
