@@ -5,6 +5,11 @@ import { DesktopPublishError } from './desktop-publish.ts'
 const publicCodes = new Set(['AccessDenied', 'InternalError', 'NoSuchBucket', 'BadDigest', 'SignatureDoesNotMatch',
   'RequestTimeout', 'TimeoutError', 'AbortError', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'ENOSPC', 'EACCES', 'EPERM', 'ENOENT'])
 
+// Message prefixes these scripts own, so their text reaches an operator verbatim without provider output.
+const ownedPrefixes = ['publish', 'release store', 'retention', 'rollback', 'tag', 'upload', 'auto-update', 'macOS signing',
+  'build', 'artifact bundle', 'artifact evidence']
+const ownedMessagePattern = new RegExp(`^(?:desktop (?:${ownedPrefixes.join('|')})[^\\n]*:|Usage:)`, 'u')
+
 /**
  * Keep actionable local validation details without recording SDK response bodies or credentials.
  * @param error Failure from validation, filesystem, subprocess or remote transport.
@@ -16,7 +21,7 @@ export function desktopPublicationFailure(error: unknown, phase: string): { phas
   if (error instanceof ZodError) return { phase, code: 'invalid-data',
     message: `Invalid fields: ${error.issues.map(issue => `${issue.path.join('.') || '(root)'} (${issue.code})`).join(', ')}` }
   if (error instanceof SyntaxError) return { phase, code: 'invalid-json', message: 'Invalid JSON; check the configuration or retained record for this stage.' }
-  const ownedMessage = /^(desktop (?:publish|release store|retention|rollback|tag|upload|auto-update|macOS signing|build)[^\n]*:|Usage:)/u
+  const ownedMessage = ownedMessagePattern
   if (error instanceof Error && ownedMessage.test(error.message)) {
     return { phase, code: 'validation', message: error.message }
   }

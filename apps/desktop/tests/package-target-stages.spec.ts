@@ -89,7 +89,7 @@ it.each(['preflight:windows-signing', 'run build:official', 'run sign:primary-ru
   expect(writeFileSync).not.toHaveBeenCalled()
 })
 
-it.each(['--unsigned', '--prepare-only'])('keeps %s hardware-free and creates no release record', async (mode) => {
+it.each(['--unsigned', '--prepare-only'])('keeps %s hardware-free and writes a release record only for a distributable artifact set', async (mode) => {
   const { run, stages } = supervisor()
   await packageTarget(parseDesktopPackageInvocation(['win-x64', mode], 'win32', 'x64'), environment, run)
   expect(stages[0]).toBe('run build:official')
@@ -98,7 +98,14 @@ it.each(['--unsigned', '--prepare-only'])('keeps %s hardware-free and creates no
   expect(stages).not.toContain('run sign:primary-runtime --dsh')
   expect(withWindowsSigningStage).not.toHaveBeenCalled()
   for (const call of run.run.mock.calls) expect(call[3].env).not.toHaveProperty('DSH_DESKTOP_WINDOWS_TOKEN_PIN')
-  expect(writeFileSync).not.toHaveBeenCalled()
+  // An unsigned build is still a distributable artifact set; a preparation-only run stops before packaging.
+  if (mode === '--unsigned') {
+    expect(writeFileSync).toHaveBeenCalledOnce()
+    const record = JSON.parse(vi.mocked(writeFileSync).mock.calls[0]![1] as string) as Record<string, unknown>
+    expect(record).not.toHaveProperty('publicUrl')
+  } else {
+    expect(writeFileSync).not.toHaveBeenCalled()
+  }
   expect(stages.includes('exec tsx scripts/smoke-packaged-runtime.ts --unsigned')).toBe(mode === '--unsigned')
 })
 
@@ -115,7 +122,7 @@ it('checks the assembled macOS runtime before notarizing and recording the relea
 
 it.each([
   ['mac-arm64', false], ['mac-arm64', true], ['mac-x64', false], ['mac-x64', true],
-] as const)('builds unsigned %s with directory=%s without Apple credentials, notarization, or a release record', async (target, directory) => {
+] as const)('builds unsigned %s with directory=%s without Apple credentials, notarization, or an update destination', async (target, directory) => {
   const { run, stages } = supervisor()
   await packageTarget(parseDesktopPackageInvocation([target, '--unsigned', ...(directory ? ['--dir'] : [])], 'darwin', 'arm64'), {
     ...environment, CSC_LINK: 'unused.p12', CSC_KEY_PASSWORD: 'unused-secret', APPLE_API_KEY: 'unused.p8',
@@ -131,7 +138,12 @@ it.each([
   }
   expect(withMacOSNotarizationProxy).not.toHaveBeenCalled()
   expect(packageMacOSArtifacts).not.toHaveBeenCalled()
-  expect(writeFileSync).not.toHaveBeenCalled()
+  // A packed artifact set carries a record without a destination; a directory-only run writes none.
+  expect(writeFileSync).toHaveBeenCalledTimes(directory ? 0 : 1)
+  if (!directory) {
+    const record = JSON.parse(vi.mocked(writeFileSync).mock.calls[0]![1] as string) as Record<string, unknown>
+    expect(record).not.toHaveProperty('publicUrl')
+  }
 })
 
 it('fails unsigned macOS packaging when the assembled runtime cannot run', async () => {
@@ -210,7 +222,14 @@ it.each([false, true])('keeps signing and runtime verification when notarization
   })
   expect(withMacOSNotarizationProxy).not.toHaveBeenCalled()
   expect(packageMacOSArtifacts).not.toHaveBeenCalled()
-  expect(writeFileSync).not.toHaveBeenCalled()
+  // An unnotarized build is still a distributable artifact set; a directory-only run writes no record.
+  if (directory) {
+    expect(writeFileSync).not.toHaveBeenCalled()
+  } else {
+    expect(writeFileSync).toHaveBeenCalledOnce()
+    const record = JSON.parse(vi.mocked(writeFileSync).mock.calls[0]![1] as string) as Record<string, unknown>
+    expect(record).toHaveProperty('publicUrl', 'https://updates.example.com/dsh-desk/0123456789abcdef0123456789abcdef/feeds/mac-arm64/')
+  }
 })
 
 it('fails debugging packages when runtime verification fails', async () => {

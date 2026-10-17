@@ -19,13 +19,13 @@ description: "将完整 Desktop 安装包与更新清单发布到选定下载服
 - [上传凭据](#credentials)
 - [上传审计与恢复](#audit-and-recovery)
 
-自托管留存构建使用 [CI 发布工作流](ci/README.zh.md)，在原机器保留安装包并支持恢复发布。 以下命令继续作为现有人工授权的本地上传器使用：它们保留 checkout 内的审计记录，并使用操作员的 Git 身份，不共享 CI 发布器的锁、审批或仅补 tag 恢复机制。不要让两种上传器并发写入同一频道。两者复用相同的上传计划校验；分开编排可保留现有手动命令，同时为 CI 增加不可变 attempt 恢复能力。统一或退役手动命令属于独立工作。
+已打包的 Desktop 构建使用 [CI 发布工作流](ci/README.zh.md)，从打包运行上传的不可变产物包发布。以下命令继续作为现有人工授权的本地上传器使用：它们保留 checkout 内的审计记录，并使用操作员的 Git 身份，不共享 CI 发布器的锁、审批或仅补 tag 恢复机制。不要让两种上传器并发写入同一频道。两者复用相同的上传计划校验；分开编排可保留现有手动命令，同时为 CI 增加不可变产物包恢复能力。统一或退役手动命令属于独立工作。
 
 <a id="prerequisites"></a>
 
 ## 发布前提
 
-发布需要完整的 release 产物和操作者明确授权。生成安装包或下载 Actions 产物不会发布它。先阅读[发布版本规则](../packaging/README.zh.md#release-versions)并保留打包证据。机器 preset 用于打包，不支持 upload/COS 命令：取消设置 `DSH_PACKAGING_PRESET`，并提供既有目标 dotenv 上传配置。配置以及真实 COS/CDN 验收由发布操作者验证。
+发布需要完整的 release 产物和操作者明确授权。生成安装包或下载 Actions 产物不会发布它。先阅读[发布版本规则](../packaging/README.zh.md#release-versions)并保留打包证据。机器 preset 用于打包，不支持 upload/COS 命令：取消设置 `DSH_PACKAGING_PRESET`，并提供既有目标 dotenv 上传配置。CI 发布使用打包运行的产物包，因此打包机器的本地 releases 目录不再是发布输入。配置以及真实 COS/CDN 验收由发布操作者验证。
 
 <a id="upload-updates"></a>
 
@@ -75,7 +75,7 @@ Windows NSIS 上传要求安装包旁存在生成的非空 `.exe.blockmap`。blo
 
 ## 上传凭据
 
-Windows 操作人员可以在仓库外保存 CLIXML 对象，其中 `SecretId` 和 `SecretKey` 是经 DPAPI 加密的 SecureString 字段。[凭据启动器](../scripts/upload-with-credentials.ps1)要求显式提供 `-CredentialFile` 和 `-Environment production` 或 `test`；不指定 `-Upload` 时，只验证解密以及向本地 Node 子进程注入凭据，不发起网络请求。它要求 `PATH` 中有 Node，并使用加密该文件时的 Windows 用户和机器。明文、空字段及纯空白字段都会失败。父进程环境保持不变；子进程先清除无关密钥与 Node 预加载选项，再仅接收所选 COS 凭据对。原始子进程 stderr 不会显示，stdout 中的凭据值会被遮盖。此检查不能证明 COS 授权有效。显式上传还要求 `-Upload -Target <target> -Bucket <bucket>` 及下述常规发布完成前提；真实云端上传仍需发布操作人员验收。在该上传调用中添加 `-Latest`，即可替换固定安装包，而不发布更新清单或发布标签。此启动器支持长期密钥，不支持 STS 凭据。显式上传要求所选部署环境和 bucket 与目标 dotenv 文件及已完成的打包记录一致，才会发起网络写入；即使 dotenv 文件含有其他 COS 密钥，也使用 DPAPI 凭据对。
+Windows 操作人员可以在仓库外保存 CLIXML 对象，其中 `SecretId` 和 `SecretKey` 是经 DPAPI 加密的 SecureString 字段。[凭据启动器](../scripts/upload-with-credentials.ps1)要求显式提供 `-CredentialFile` 和 `-Environment production` 或 `test`；不指定 `-Upload` 时，只验证解密以及向本地 Node 子进程注入凭据，不发起网络请求。它要求 `PATH` 中有 Node，并使用加密该文件时的 Windows 用户和机器。明文、空字段及纯空白字段都会失败。父进程环境保持不变；子进程先清除无关密钥与 Node 预加载选项，再仅接收所选 COS 凭据对。原始子进程 stderr 不会显示，stdout 中的凭据值会被遮盖。此检查不能证明 COS 授权有效。显式上传还要求 `-Upload -Target <target> -Bucket <bucket>` 及下述常规发布完成前提；真实云端上传仍需发布操作人员验收。在该上传调用中添加 `-Latest`，即可替换固定安装包，而不发布更新清单或发布标签。此启动器支持长期密钥，不支持 STS 凭据。显式上传要求所选部署环境和 bucket 与目标 dotenv 文件及已完成的打包记录一致，才会发起网络写入；即使 dotenv 文件含有其他 COS 密钥，也使用 DPAPI 凭据对。[CI 发布工作流](ci/README.zh.md)则从 `DSH_PUBLISH_CONFIG_JSON` 和 `DSH_COS_CREDENTIALS_JSON` Environment secret 读取这些值，并从 `DSH_GITHUB_APP_PRIVATE_KEY` 读取 GitHub App 私钥。
 
 <a id="audit-and-recovery"></a>
 

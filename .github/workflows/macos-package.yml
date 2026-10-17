@@ -131,12 +131,12 @@ jobs:
           path: apps/desktop/.desktop-build/packaging-runs/
           if-no-files-found: warn
           retention-days: 14
-      - name: Retain installers for the selected mode
+      - name: Retain verified artifact bundle
         if: success()
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: macos-arm64-${{ steps.settings.outputs.mode }}-${{ steps.settings.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.retained.outputs.artifact-name }}
           include-hidden-files: true
-          path: ${{ steps.retained.outputs.directory }}/*
+          path: ${{ steps.retained.outputs.directory }}
           if-no-files-found: error
-          retention-days: 14
+          retention-days: ${{ inputs.skip_notarization && 30 || 90 }}

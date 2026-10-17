@@ -1,17 +1,17 @@
 /** Manual channel restoration: read-only preview unless --execute is explicitly present. */
 import { readFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { z } from 'zod'
 import { prepareDesktopPublication } from './publish-desktop-ci.ts'
-import { readDesktopUploadCredentials } from './desktop-publish-config.ts'
+import { desktopPublishSecrets, readDesktopUploadCredentials } from './desktop-publish-config.ts'
 import { desktopPublishCos } from './desktop-publish-cos.ts'
 import { createDesktopPublicationRecord, withDesktopChannelLock } from './desktop-publish-record.ts'
 import { rollbackDesktopChannel } from './desktop-rollback.ts'
 import { desktopPublicationFailure } from './desktop-publication-failure.ts'
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === import.meta.filename) {
-  let phase = 'rollback arguments and local publication verification'
+  let phase = 'rollback arguments and downloaded package verification'
   try {
     const { values } = parseArgs({ options: {
       record: { type: 'string' }, 'expected-version': { type: 'string' },
@@ -25,17 +25,16 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === import.meta.fi
       .parse(JSON.parse(await readFile(join(values.record, 'operation.json'), 'utf8')))
     z.object({ status: z.enum(['complete', 'published-tag-pending']) })
       .parse(JSON.parse(await readFile(join(values.record, 'result.json'), 'utf8')))
-    const { plan, config, root, manifest } = await prepareDesktopPublication(process.env)
-    const route = z.object({ runId: z.string(), attempt: z.string() }).parse(JSON.parse(process.env.DESKTOP_PUBLISH_ROUTE || '{}'))
-    const destination = `${plan.bucket}/${plan.publicUrl}${manifest.source.channel}`
-    if (operation.runId !== route.runId || operation.attempt !== route.attempt
+    const { selection, plan, config, manifest, stateRoot } = await prepareDesktopPublication(process.env)
+    const destination = `${plan.bucket}/${plan.publicUrl}${manifest.build.channel}`
+    if (operation.runId !== selection.runId || operation.attempt !== selection.attempt
       || operation.repository !== process.env.GITHUB_REPOSITORY || operation.destination !== destination) {
       throw new Error('desktop rollback: successful publication record does not match the selected package')
     }
-    const credentials = await readDesktopUploadCredentials(config)
+    const credentials = await readDesktopUploadCredentials(config, desktopPublishSecrets(process.env))
     phase = 'rollback channel lock and audit creation'
-    await withDesktopChannelLock(join(dirname(root), 'publish-locks'), destination, async () => {
-      const journal = await createDesktopPublicationRecord(join(dirname(root), 'upload-records'), {
+    await withDesktopChannelLock(join(stateRoot, 'publish-locks'), destination, async () => {
+      const journal = await createDesktopPublicationRecord(join(stateRoot, 'upload-records'), {
         ...operation, actor: process.env.USER || process.env.USERNAME || 'unknown', operation: 'rollback', reason: values.reason!,
       })
       process.stdout.write(`desktop rollback: audit ${journal.directory}\n`)

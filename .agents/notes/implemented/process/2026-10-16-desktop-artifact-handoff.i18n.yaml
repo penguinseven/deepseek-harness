@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-10-16-desktop-artifact-handoff.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-10-16-desktop-artifact-handoff.md
+/agent-note-desktop-artifact-handoff:
+  en: 8e442cad9199f9e6
+  zh: 291a1c9f30bd6957
+/agent-note-desktop-artifact-handoff/problem:
+  en: 9cb912edf274dd9c
+  zh: 88cf0fb87dc309b6
+/agent-note-desktop-artifact-handoff/decision:
+  en: e1bcbea7dc73432b
+  zh: b71a059ce2139ebb
+/agent-note-desktop-artifact-handoff/alternatives-considered:
+  en: 6a8dd948867e4ac3
+  zh: b167d54eb77e1c64
+/agent-note-desktop-artifact-handoff/consequences:
+  en: d69dc86c5e852c99
+  zh: 81a38589a0ff75f1

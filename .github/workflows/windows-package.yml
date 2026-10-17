@@ -147,21 +147,21 @@ jobs:
           path: apps/desktop/.desktop-build/packaging-runs/
           if-no-files-found: warn
           retention-days: 14
-      - name: Retain verified unsigned installer
+      - name: Retain verified unsigned artifact bundle
         if: success() && inputs.signing == 'unsigned'
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: windows-x64-unsigned-${{ steps.settings.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.retained.outputs.artifact-name }}
           include-hidden-files: true
-          path: ${{ steps.retained.outputs.directory }}/*
+          path: ${{ steps.retained.outputs.directory }}
           if-no-files-found: error
-          retention-days: 14
-      - name: Retain verified signed installer
+          retention-days: 30
+      - name: Retain verified signed artifact bundle
         if: success() && inputs.signing == 'signed'
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: windows-x64-signed-${{ steps.settings.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.retained.outputs.artifact-name }}
           include-hidden-files: true
-          path: ${{ steps.retained.outputs.directory }}/*
+          path: ${{ steps.retained.outputs.directory }}
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 90

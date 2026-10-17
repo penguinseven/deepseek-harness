@@ -54,6 +54,13 @@ export interface DesktopUploadPlan {
   readonly dirty?: boolean
 }
 
+/** Upload-byte fingerprints of one planned object key. */
+export interface DesktopUploadArtifactDigest {
+  /** Exact byte length of the contents that will be uploaded. */
+  readonly size: number
+  /** Lowercase hexadecimal SHA-256, matching `shasum -a 256`. */
+  readonly sha256: string
+}
 /** Filesystem and environment inputs used to validate one upload. */
 export interface DesktopUploadPlanOptions {
   /** Publish only the installer at its fixed download URL, replacing the previous object. */
@@ -64,6 +71,8 @@ export interface DesktopUploadPlanOptions {
   readonly artifactsRoot?: string
   /** Original product version from a verified retained build; absent reads the checkout manifests. */
   readonly packagedProductVersion?: string
+  /** Package completion record from the artifact bundle; absent reads it from the artifacts directory. */
+  readonly buildRecord?: unknown
 }
 
 interface UpdateFileInfo {
@@ -172,6 +181,35 @@ function uploadArtifact(
 }
 
 /**
+ * Fingerprint the exact bytes each planned key will carry.
+ * @param plan Validated upload plan.
+ * @returns SHA-256 and byte size per upload key; an empty or unreadable file rejects.
+ */
+export async function digestDesktopUploadArtifacts(
+  plan: DesktopUploadPlan,
+): Promise<ReadonlyMap<string, DesktopUploadArtifactDigest>> {
+  const digests = new Map<string, DesktopUploadArtifactDigest>()
+  for (const artifact of plan.artifacts) {
+    const hash = createHash('sha256')
+    let size = 0
+    if (artifact.contents === undefined) {
+      for await (const chunk of createReadStream(artifact.path)) {
+        size += chunk.length
+        hash.update(chunk)
+      }
+    }
+    else {
+      // Channel metadata is published with rewritten URLs, so the digest covers these bytes rather than the local file.
+      const contents = Buffer.from(artifact.contents)
+      size = contents.length
+      hash.update(contents)
+    }
+    if (size === 0) throw new Error(`desktop upload: ${artifact.filename} is empty`)
+    digests.set(artifact.key, { size, sha256: hash.digest('hex') })
+  }
+  return digests
+}
+/**
  * Validate the completed package record, dsh version, update metadata, hashes, and target files.
  * @param targetName - Fixed platform and architecture selected by the upload command.
  * @param options - Optional filesystem roots and environment for tests or release automation.
@@ -196,10 +234,12 @@ export async function createDesktopUploadPlan(
   }
 
   const update = resolveDesktopUploadConfig(environment, target.platform, target.arch)
-  const buildRecord = await jsonFile(
-    join(artifactsRoot, desktopBuildRecordFilename(targetName)),
-    `${targetName} package completion record`,
-  )
+  const buildRecord = options.buildRecord === undefined
+    ? await jsonFile(
+      join(artifactsRoot, desktopBuildRecordFilename(targetName)),
+      `${targetName} package completion record`,
+    )
+    : object(options.buildRecord, `${targetName} package completion record`)
   // Packaging wrote the version it published; reading it back keeps release settings out of shell variables.
   const recordedVersion = stringField(buildRecord.version, `${targetName} package completion record.version`)
   let buildVersion: string
@@ -210,11 +250,12 @@ export async function createDesktopUploadPlan(
     throw new Error(`desktop upload: ${targetName} package completion record holds ${recordedVersion}, which is not a build of dsh ${dshVersion}: ${
       error instanceof Error ? error.message : String(error)}`)
   }
+  // A build that cannot publish omits the destination it was packaged for; compare only what the record states.
   if (buildRecord.schemaVersion !== 1
     || buildRecord.target !== targetName
-    || (buildRecord.channel ?? 'nightly') !== update.channel
-    || buildRecord.environment !== update.environment
-    || buildRecord.publicUrl !== update.publicUrl) {
+    || (buildRecord.channel !== undefined && buildRecord.channel !== update.channel)
+    || (buildRecord.environment !== undefined && buildRecord.environment !== update.environment)
+    || (buildRecord.publicUrl !== undefined && buildRecord.publicUrl !== update.publicUrl)) {
     throw new Error(`desktop upload: ${targetName} package completion record for ${buildVersion} does not match the ${update.environment} update destination`)
   }
 

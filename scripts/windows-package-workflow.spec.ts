@@ -97,13 +97,22 @@ it('validates before building and passes the same mode and version to checks and
   expect(job.steps.some(step => step.run?.includes('.env.windows'))).toBe(false)
 })
 
-it('retains failure diagnostics and uploads only the selected successful installer', () => {
+it('retains failure diagnostics and uploads the verified bundle for the selected mode', () => {
   const uploads = job.steps.filter(step => step.uses?.startsWith('actions/upload-artifact@'))
   expect(uploads).toHaveLength(3)
   expect(uploads[0]!.if).toBe("always() && steps.checkout.outcome == 'success'")
-  expect(uploads[0]!.with).toMatchObject({ path: 'apps/desktop/.desktop-build/packaging-runs/', 'include-hidden-files': true })
-  for (const mode of ['unsigned', 'signed']) {
+  expect(uploads[0]!.with).toMatchObject({
+    path: 'apps/desktop/.desktop-build/packaging-runs/', 'include-hidden-files': true, 'retention-days': 14,
+  })
+  for (const [mode, retention] of [['unsigned', 30], ['signed', 90]] as const) {
     const upload = uploads.find(step => step.if === `success() && inputs.signing == '${mode}'`)!
-    expect(upload.with).toMatchObject({ path: '${{ steps.retained.outputs.directory }}/*', 'if-no-files-found': 'error' })
+    expect(upload.name).toBe(`Retain verified ${mode} artifact bundle`)
+    expect(upload.with).toMatchObject({
+      name: '${{ steps.retained.outputs.artifact-name }}',
+      path: '${{ steps.retained.outputs.directory }}',
+      'include-hidden-files': true,
+      'if-no-files-found': 'error',
+      'retention-days': retention,
+    })
   }
 })

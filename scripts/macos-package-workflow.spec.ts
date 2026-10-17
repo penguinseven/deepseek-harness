@@ -27,8 +27,15 @@ it('confines signed Mac packaging to manual dispatch and a dedicated Apple Silic
   const uploads = steps.filter(step => step.uses?.startsWith('actions/upload-artifact@'))
   expect(uploads).toHaveLength(2)
   expect(uploads[0]?.if).toBe("always() && steps.checkout.outcome == 'success'")
+  expect(uploads[0]?.with).toMatchObject({ path: 'apps/desktop/.desktop-build/packaging-runs/', 'retention-days': 14 })
   expect(uploads[1]?.if).toBe('success()')
-  expect(uploads[1]?.with?.path).toBe('${{ steps.retained.outputs.directory }}/*')
+  expect(uploads[1]?.with).toMatchObject({
+    name: '${{ steps.retained.outputs.artifact-name }}',
+    path: '${{ steps.retained.outputs.directory }}',
+    'include-hidden-files': true,
+    'if-no-files-found': 'error',
+    'retention-days': '${{ inputs.skip_notarization && 30 || 90 }}',
+  })
 })
 
 it('defaults to notarization and labels the explicit debugging option', () => {
@@ -38,5 +45,5 @@ it('defaults to notarization and labels the explicit debugging option', () => {
   } } })
   const steps = workflow.jobs.package!.steps
   expect(steps.filter(step => step.run?.includes('args+=(--skip-notarization)'))).toHaveLength(2)
-  expect(steps.find(step => step.name === 'Retain installers for the selected mode')?.with?.name).toContain('${{ steps.settings.outputs.mode }}')
+  expect(steps.find(step => step.name === 'Retain verified artifact bundle')?.with?.name).toBe('${{ steps.retained.outputs.artifact-name }}')
 })
