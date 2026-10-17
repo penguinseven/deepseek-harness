@@ -136,6 +136,10 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           exit $LASTEXITCODE
+      # A hosted runner owns no machine preset; unsigned packaging writes the public test settings itself.
+      - name: Write the hosted packaging configuration
+        if: inputs.signing == 'unsigned'
+        run: node --import tsx apps/desktop/scripts/hosted-config-command.ts
       - name: Validate preset and resolve build version
         id: settings
         env:

@@ -72,15 +72,18 @@ export async function retainDesktopCi(
   if (!windows && !['true', 'false'].includes(env.PACKAGE_SKIP_NOTARIZATION ?? '')) throw new Error('desktop artifact bundle: invalid notarization selection')
   const qualification = windows ? (env.PACKAGE_SIGNING === 'signed' ? 'signed' : 'unsigned')
     : (env.PACKAGE_SKIP_NOTARIZATION === 'true' ? 'unnotarized' : 'notarized')
+  // An unnotarized build on a hosted runner signs ad hoc, so it prints the distribution layout instead of the debug one.
+  const adHocSigning = !windows && env.PACKAGE_AD_HOC_SIGNING === 'true'
   const product: { version: string } = JSON.parse(await readFile(join(appRoot, 'package.json'), 'utf8'))
   const version = validateDesktopBuildVersion(required(env, 'PACKAGE_VERSION'), product.version)
   const channel = resolveDesktopUpdateChannel(settings)
   const paths = desktopTargetBuildPaths(target)
   // The CLI's checkout owns these paths; alternate app roots are used by fixtures.
-  const mode = qualification === 'unsigned' ? 'unsigned-artifacts' : qualification === 'unnotarized' ? 'unnotarized-artifacts' : 'artifacts'
+  const mode = qualification === 'unsigned' ? 'unsigned-artifacts'
+    : qualification === 'unnotarized' && !adHocSigning ? 'unnotarized-artifacts' : 'artifacts'
   const artifacts = appRoot === resolve(import.meta.dirname, '..')
     ? join(paths.root, mode) : join(appRoot, '.desktop-build', 'targets', target, mode)
-  const suffix = qualification === 'unnotarized' ? '-unnotarized' : qualification === 'unsigned' ? '-unsigned' : ''
+  const suffix = qualification === 'unnotarized' && !adHocSigning ? '-unnotarized' : qualification === 'unsigned' ? '-unsigned' : ''
   const base = `deepseek-harness-${version}-${windows ? 'win-x64' : target}${suffix}`
   // An unsigned macOS build creates the DMG alone; a notarized or unnotarized one adds the update archive.
   const archives = windows ? [`${base}.exe`] : qualification === 'unsigned' ? [`${base}.dmg`] : [`${base}.dmg`, `${base}.zip`]

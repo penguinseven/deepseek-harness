@@ -85,6 +85,8 @@ jobs:
         shell: bash
     env:
       PACKAGE_SKIP_NOTARIZATION: ${{ inputs.skip_notarization }}
+      # The hosted unnotarized runner owns no certificate, so only its build signs ad hoc.
+      PACKAGE_HOSTED: ${{ needs.qualify.outputs.qualification == 'unnotarized' && 'true' || 'false' }}
       PACKAGE_SOURCE_REF: ${{ inputs.source_ref }}
       PACKAGE_VERSION_MODE: ${{ inputs.version_mode }}
       DSH_DESKTOP_UPDATE_CHANNEL: ${{ inputs.update_channel }}
@@ -124,6 +126,10 @@ jobs:
           node-version: '24'
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
+      # A hosted runner owns no machine preset; unnotarized packaging writes the public test settings itself.
+      - name: Write the hosted packaging configuration
+        if: inputs.skip_notarization
+        run: node --import tsx apps/desktop/scripts/hosted-config-command.ts
       - name: Validate preset and resolve build version
         id: settings
         env:
@@ -135,6 +141,8 @@ jobs:
         run: |
           args=()
           if [[ "$PACKAGE_SKIP_NOTARIZATION" = true ]]; then args+=(--skip-notarization); fi
+          # The hosted unnotarized runner owns no certificate, so its build signs ad hoc.
+          if [[ "$PACKAGE_HOSTED" = true ]]; then args+=(--ad-hoc-signing); fi
           pnpm run package:desktop:mac:arm64 --check --build-version "$PACKAGE_VERSION" "${args[@]}"
       - name: Build signed installers
         env:
@@ -142,12 +150,14 @@ jobs:
         run: |
           args=()
           if [[ "$PACKAGE_SKIP_NOTARIZATION" = true ]]; then args+=(--skip-notarization); fi
+          if [[ "$PACKAGE_HOSTED" = true ]]; then args+=(--ad-hoc-signing); fi
           pnpm run package:desktop:mac:arm64 --build-version "$PACKAGE_VERSION" "${args[@]}"
       - name: Retain complete package outside the checkout
         id: retained
         env:
           PACKAGE_SOURCE_SHA: ${{ steps.checkout.outputs.commit }}
           PACKAGE_VERSION: ${{ steps.settings.outputs.version }}
+          PACKAGE_AD_HOC_SIGNING: ${{ needs.qualify.outputs.qualification == 'unnotarized' && 'true' || 'false' }}
         run: node --import tsx apps/desktop/scripts/retain-desktop-ci.ts
       - name: Retain packaging diagnostics
         if: always() && steps.checkout.outcome == 'success'

@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-10-17-hosted-packaging-and-mirror-phase.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-10-17-hosted-packaging-and-mirror-phase.md
+/agent-note-hosted-desktop-packaging-and-the-release-mirror-phase:
+  en: 80be997d342d5576
+  zh: fb1fbbb3fbabc294
+/agent-note-hosted-desktop-packaging-and-the-release-mirror-phase/problem:
+  en: 5e5829f941bfb189
+  zh: 55bb5c21efb20967
+/agent-note-hosted-desktop-packaging-and-the-release-mirror-phase/decision:
+  en: 469927d90c2de6a6
+  zh: 99575e4d7eedd257
+/agent-note-hosted-desktop-packaging-and-the-release-mirror-phase/alternatives-considered:
+  en: 20b4696ba74d532c
+  zh: 1569d95c0c253245
+/agent-note-hosted-desktop-packaging-and-the-release-mirror-phase/consequences:
+  en: 89fbca9f00e91253
+  zh: 90b5359031bd2e59

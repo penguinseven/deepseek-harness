@@ -83,6 +83,7 @@ jobs:
         env:
           DESKTOP_PUBLISH_ROUTE: ${{ needs.route.outputs.selection }}
           DESKTOP_ARTIFACT_BUNDLE_DIR: ${{ github.workspace }}/desktop-publisher/artifact-bundle
+          DSH_PUBLISH_CONFIG_JSON: ${{ secrets.DSH_PUBLISH_CONFIG_JSON }}
         run: node --import tsx apps/desktop/scripts/publish-desktop-ci.ts --check
 
   publish:
@@ -123,6 +124,9 @@ jobs:
       - name: Verify the downloaded package without upload credentials
         id: check
         working-directory: desktop-publisher
+        env:
+          # The destination comes from Environment settings; this step reads no upload credential.
+          DSH_PUBLISH_CONFIG_JSON: ${{ secrets.DSH_PUBLISH_CONFIG_JSON }}
         run: node --import tsx apps/desktop/scripts/publish-desktop-ci.ts --check
       - name: Read machine GitHub App key
         if: needs.prepare.outputs.preset == 'production'
@@ -200,6 +204,9 @@ jobs:
       - name: Verify the downloaded package without upload credentials
         id: check
         working-directory: desktop-publisher
+        env:
+          # The destination comes from Environment settings; this step reads no upload credential.
+          DSH_PUBLISH_CONFIG_JSON: ${{ secrets.DSH_PUBLISH_CONFIG_JSON }}
         run: node --import tsx apps/desktop/scripts/publish-desktop-ci.ts --check
       - name: Read machine GitHub App key
         if: needs.prepare.outputs.preset == 'production'

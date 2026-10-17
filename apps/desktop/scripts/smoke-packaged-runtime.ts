@@ -8,10 +8,14 @@ import { smokePreparedRuntime } from './smoke-prepared-runtime.ts'
 import { resolveDesktopPackageTarget } from './package-target.ts'
 
 const paths = resolveDesktopTargetBuildPaths()
-const { values } = parseArgs({ options: { unsigned: { type: 'boolean', default: false }, 'skip-notarization': { type: 'boolean', default: false } }, allowPositionals: false })
+const { values } = parseArgs({ options: { unsigned: { type: 'boolean', default: false },
+  'skip-notarization': { type: 'boolean', default: false }, 'ad-hoc-signing': { type: 'boolean', default: false } }, allowPositionals: false })
 const target = resolveDesktopBuildTarget()
 const windows = target === 'win-x64'
-const artifacts = desktopArtifactOutput(paths, { unsigned: values.unsigned, skipNotarization: values['skip-notarization'] }).directory
+// Ad-hoc signing prints the distribution layout, so it overrides the debugging skip's own directory.
+const artifacts = desktopArtifactOutput(paths, {
+  unsigned: values.unsigned, skipNotarization: values['skip-notarization'] && !values['ad-hoc-signing'],
+}).directory
 const application = windows ? join(artifacts, 'win-unpacked')
   : join(artifacts, target === 'mac-arm64' ? 'mac-arm64' : 'mac', 'DeepSeek Harness.app', 'Contents')
 const resources = join(application, windows ? 'resources' : 'Resources')

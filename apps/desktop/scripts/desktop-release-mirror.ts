@@ -38,8 +38,16 @@ export interface DesktopReleaseMirrorResult {
 }
 
 const releaseSchema = z.object({ id: z.number().int().positive(), html_url: z.string().min(1), upload_url: z.string().min(1) })
-const assetSchema = z.object({ id: z.number().int().positive(), name: z.string().min(1), size: z.number().int().nonnegative() })
+/** One listed asset; GitHub reports `digest` as `sha256:<hex>` for assets uploaded since 2025. */
+const assetSchema = z.object({
+  id: z.number().int().positive(),
+  name: z.string().min(1),
+  size: z.number().int().nonnegative(),
+  digest: z.string().regex(/^sha256:[a-f0-9]{64}$/u).nullish(),
+})
 const assetsSchema = z.object({ assets: z.array(assetSchema) })
+/** One listed asset whose identity the mirror compares against the approved bytes. */
+type ReleaseAsset = z.infer<typeof assetSchema>
 
 /** One Release identity, including the upload host that creation or lookup reported for it. */
 interface ReleaseTarget {
@@ -161,11 +169,47 @@ async function uploadAsset(
 }
 
 /**
+ * Require an already published asset to hold the approved bytes before leaving it untouched.
+ * @param repository Owner/name of the release repository.
+ * @param approved Approved asset, whose SHA-256 the bundle manifest recorded.
+ * @param existing Asset GitHub listed under the approved name.
+ * @param token Installation token limited to release contents.
+ * @param request HTTP implementation.
+ * @returns Nothing; a name already published with other bytes rejects.
+ * GitHub's SHA-256 asset digest is authoritative when present; otherwise the asset is downloaded and hashed.
+ */
+async function confirmPublishedAsset(
+  repository: string, approved: DesktopReleaseAsset, existing: ReleaseAsset, token: string, request: typeof fetch,
+): Promise<void> {
+  const mismatch = (found: string) => new Error(
+    `desktop mirror: ${approved.name} already exists with ${found} instead of the approved ${approved.sha256}; inspect the Release before retrying`)
+  // Approved bytes have a fixed length, so a different size is a different file under a published name.
+  if (existing.size !== approved.size) throw mismatch(`${existing.size} bytes`)
+  if (existing.digest !== null && existing.digest !== undefined) {
+    if (existing.digest.slice('sha256:'.length) !== approved.sha256) throw mismatch(`SHA-256 ${existing.digest}`)
+    return
+  }
+  // Assets uploaded before GitHub reported digests can only be compared by reading them back.
+  const response = await request(api(repository, `releases/assets/${existing.id}`), {
+    headers: { ...headers(token), Accept: 'application/octet-stream' }, redirect: 'follow', signal: AbortSignal.timeout(600_000),
+  })
+  if (!response.ok) {
+    await discard(response)
+    throw new Error(`desktop mirror: cannot read the published ${approved.name} to compare its bytes (HTTP ${response.status})`)
+  }
+  const hash = createHash('sha256')
+  let size = 0
+  for await (const bytes of response.body ?? []) { size += bytes.length; hash.update(bytes) }
+  const actual = hash.digest('hex')
+  if (size !== approved.size || actual !== approved.sha256) throw mismatch(`SHA-256 ${actual}`)
+}
+
+/**
  * Mirror every approved asset of one publication into its `desktop-v<version>` Release.
  *
- * The operation is idempotent: an asset already present with the approved size and name is left untouched, and only
- * missing assets are uploaded. Name and kind are checked before any upload, so a Release holding different bytes for
- * the same file name stops the mirror instead of overwriting published download bytes.
+ * The operation is idempotent: an asset already present with the approved name, size and SHA-256 is left untouched,
+ * and only missing assets are uploaded. A Release holding other bytes under an approved name stops the mirror
+ * before any upload instead of overwriting published download bytes.
  * @param options Release repository, published version, approved assets and the token scoped to release contents.
  * @returns Terminal `complete` state, the Release URL and which assets this invocation uploaded or confirmed.
  * A conflicting Release, a changed asset and any transport failure reject without touching COS or the feeds.
@@ -199,16 +243,13 @@ export async function mirrorDesktopRelease(options: {
     await discard(listing)
     throw new Error(`desktop mirror: cannot list the assets of ${tag} (HTTP ${listing.status})`)
   }
-  const present = new Map(assetsSchema.parse(await listing.json()).assets.map(asset => [asset.name, asset.size]))
-  const absent = assets.filter((asset) => {
-    const size = present.get(asset.name)
-    if (size === undefined) return true
-    // Approved bytes have a fixed length, so a different size is a different file under an already-published name.
-    if (size !== asset.size) {
-      throw new Error(`desktop mirror: ${asset.name} already exists with ${size} bytes instead of the approved ${asset.size}; inspect the Release before retrying`)
-    }
-    return false
-  })
+  const listed = new Map(assetsSchema.parse(await listing.json()).assets.map(asset => [asset.name, asset]))
+  const absent: DesktopReleaseAsset[] = []
+  for (const asset of assets) {
+    const existing = listed.get(asset.name)
+    if (existing === undefined) { absent.push(asset); continue }
+    await confirmPublishedAsset(repository, asset, existing, token, request)
+  }
   const confirmed = assets.filter(asset => !absent.includes(asset))
   for (const asset of absent) {
     const actual = await digest(asset)
@@ -226,9 +267,12 @@ export async function mirrorDesktopRelease(options: {
     await discard(after)
     throw new Error(`desktop mirror: cannot confirm the assets of ${tag} (HTTP ${after.status})`)
   }
-  const final = new Map(assetsSchema.parse(await after.json()).assets.map(asset => [asset.name, asset.size]))
+  const final = new Map(assetsSchema.parse(await after.json()).assets.map(asset => [asset.name, asset]))
   for (const asset of assets) {
-    if (final.get(asset.name) !== asset.size) throw new Error(`desktop mirror: ${asset.name} is missing from the Release after mirroring`)
+    const stored = final.get(asset.name)
+    if (stored === undefined) throw new Error(`desktop mirror: ${asset.name} is missing from the Release after mirroring`)
+    // Reading the stored bytes back is the only confirmation that the upload stored the approved file.
+    await confirmPublishedAsset(repository, asset, stored, token, request)
   }
   return { status: 'complete', url: target.htmlUrl, uploaded, present: confirmed.map(asset => asset.name) }
 }

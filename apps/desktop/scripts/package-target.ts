@@ -198,6 +198,8 @@ interface DesktopPackageInvocation {
   readonly prepareOnly: boolean
   readonly unsigned: boolean
   readonly skipNotarization: boolean
+  /** Sign ad hoc instead of with a Developer ID certificate; only a skipped notarization selects it. */
+  readonly adHocSigning: boolean
   readonly check: boolean
   /** Build identifier to publish under, when this build does not publish the product version. */
   readonly requestedBuildVersion: string | undefined
@@ -231,6 +233,7 @@ export function parseDesktopPackageInvocation(
       'prepare-only': { type: 'boolean', default: false },
       unsigned: { type: 'boolean', default: false },
       'skip-notarization': { type: 'boolean', default: false },
+      'ad-hoc-signing': { type: 'boolean', default: false },
       check: { type: 'boolean', default: false },
       'build-version': { type: 'string' },
     },
@@ -240,6 +243,9 @@ export function parseDesktopPackageInvocation(
   if (values.unsigned && values['prepare-only']) throw new Error('desktop package: --unsigned cannot use --prepare-only')
   if (values['skip-notarization'] && (name === 'win-x64' || values.unsigned || values['prepare-only'])) {
     throw new Error('desktop package: --skip-notarization requires a signed macOS build, without --prepare-only')
+  }
+  if (values['ad-hoc-signing'] && (!values['skip-notarization'] || name === 'win-x64' || values.unsigned || values['prepare-only'])) {
+    throw new Error('desktop package: --ad-hoc-signing requires the macOS --skip-notarization build, without --unsigned or --prepare-only')
   }
   const requestedBuildVersion = values['build-version']?.trim()
   if (values['build-version'] !== undefined && (requestedBuildVersion === undefined || requestedBuildVersion === '')) {
@@ -251,6 +257,7 @@ export function parseDesktopPackageInvocation(
     prepareOnly: values['prepare-only'],
     unsigned: values.unsigned,
     skipNotarization: values['skip-notarization'],
+    adHocSigning: values['ad-hoc-signing'],
     check: values.check,
     requestedBuildVersion,
   }
@@ -425,7 +432,8 @@ export async function packageTarget(
   const mac = target.platform === 'darwin' ? resolveMacOSPackageSettings(environment) : undefined
   const packArguments = mac === undefined ? [] : ['--concurrency', String(mac.packConcurrency)]
   const buildPaths = desktopTargetBuildPaths(target.name)
-  const artifactOutput = desktopArtifactOutput(buildPaths, invocation)
+  const artifactOutput = desktopArtifactOutput(buildPaths, {
+    unsigned: invocation.unsigned, skipNotarization: invocation.skipNotarization && !invocation.adHocSigning })
   // The record describes a distributable artifact set, so directory-only and preparation-only runs write none.
   const releaseRecordPath = join(artifactOutput.directory, desktopBuildRecordFilename(target.name))
   if (!invocation.prepareOnly && !invocation.directory) {
@@ -438,6 +446,7 @@ export async function packageTarget(
   const targetEnv: NodeJS.ProcessEnv = {
     ...buildEnv,
     DSH_DESKTOP_MACOS_SKIP_NOTARIZATION: invocation.skipNotarization ? '1' : '0',
+    DSH_DESKTOP_AD_HOC_SIGNING: invocation.adHocSigning ? '1' : '0',
     DSH_DESKTOP_TARGET_PLATFORM: target.platform,
     DSH_DESKTOP_TARGET_ARCH: target.arch,
   }
@@ -514,6 +523,10 @@ export async function packageTarget(
       artifactsRoot: buildPaths.artifacts,
       environment: electronBuilderEnv,
     }, artifact => execute(desktopElectronBuilderArguments(target, false, artifact), electronBuilderEnv)), undefined, undefined, proxyEvent)
+  } else if (invocation.adHocSigning) {
+    // Ad-hoc signing prints the distribution layout without a certificate: one DMG, no update archive.
+    await execute(desktopElectronBuilderArguments(target, invocation.directory), electronBuilderEnv)
+    await execute(['exec', 'tsx', 'scripts/smoke-packaged-runtime.ts', '--skip-notarization', '--ad-hoc-signing'], targetEnv)
   } else if (target.platform === 'darwin' && !invocation.unsigned && !invocation.skipNotarization) {
     await execute([...desktopElectronBuilderArguments(target, true), '--config.mac.notarize=false'], electronBuilderEnv)
     await execute(['exec', 'tsx', 'scripts/smoke-packaged-runtime.ts'], targetEnv)
@@ -523,10 +536,11 @@ export async function packageTarget(
   } else {
     await signedStage('artifacts', () => execute(desktopElectronBuilderArguments(target, invocation.directory), electronBuilderEnv))
     await execute(['exec', 'tsx', 'scripts/smoke-packaged-runtime.ts',
-      ...(invocation.unsigned ? ['--unsigned'] : []), ...(invocation.skipNotarization ? ['--skip-notarization'] : [])], targetEnv)
+      ...(invocation.unsigned ? ['--unsigned'] : []), ...(invocation.skipNotarization ? ['--skip-notarization'] : []),
+      ...(invocation.adHocSigning ? ['--ad-hoc-signing'] : [])], targetEnv)
   }
   if (!invocation.directory && !invocation.prepareOnly) {
-    writeReleaseRecord(target, electronBuilderEnv, artifactsRoot, !invocation.unsigned)
+    writeReleaseRecord(target, electronBuilderEnv, artifactsRoot, !invocation.unsigned && !invocation.adHocSigning)
   }
   if (journal) recordPackagingEvent(journal, { type: 'artifacts', directory: artifactsRoot })
 }

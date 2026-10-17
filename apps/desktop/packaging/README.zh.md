@@ -113,14 +113,16 @@ macOS 正式发布和本地未签名 DMG 都通过 [electron-builder 配置](../
 
 ## macOS Actions 打包
 
-`Package Desktop · macOS` [手动工作流](../../../.github/workflows/macos-package.yml) 运行同一个 `qualify` 作业，仅在选择公证时指向 Apple Silicon 签名机。`skip_notarization=true` 在托管的 `macos-14` 镜像上构建；需要公证的构建读取仓库变量 `DESKTOP_MAC_SIGNED_RUNNER`，变量为空时在分配 runner 之前失败。它选择 `test` 或 `production`，以 UTC 日期、运行编号和重试次数解析 `build_version=auto`，并复用现有签名、公证和打包运行时检查。成功的 DMG／ZIP 与诊断日志保留 14 天；工作流不发布 release。操作人员须注册 runner，并验收完整 Actions 运行后再依赖该流程。
+`Package Desktop · macOS` [手动工作流](../../../.github/workflows/macos-package.yml) 运行同一个 `qualify` 作业，仅在选择公证时指向 Apple Silicon 签名机。`skip_notarization=true` 在托管的 `macos-14` 镜像上以 `--ad-hoc-signing` 构建，该作业不需要任何签名或公证凭据；需要公证的构建读取仓库变量 `DESKTOP_MAC_SIGNED_RUNNER`，变量为空时在分配 runner 之前失败。它选择 `test` 或 `production`，以 UTC 日期、运行编号和重试次数解析 `build_version=auto`，并复用现有签名、公证和打包运行时检查。成功的 DMG／ZIP 与诊断日志保留 14 天；工作流不发布 release。操作人员须注册 runner，并验收完整 Actions 运行后再依赖该流程。
 
 运行 `node apps/desktop/scripts/setup-macos-packaging.mjs "$HOME/dsh-ci"` 创建私有 `runner/`、`packaging/{presets,secrets,certificates}` 和 `cache/macos-signatures` 目录，不覆盖已有文件；追加 `--check` 仅检查。在 checkout 外填写 [preset](../config/macos-packaging/test.env.example) 和[签名](../config/macos-packaging/macos-signing.env.example)模板，将秘密和证书文件权限设为 `0600`。`DSH_PACKAGING_CONFIG_DIR` 指定 `packaging` 的绝对目录，`DSH_PACKAGING_PRESET` 选择其中的 preset；缺少文件立即失败，不回退到 `.env.macos`。Mac 签名和仅准备构建读取 `secrets/macos-signing.env`，相对凭据路径以该文件所在目录为基准。公开 preset 拒绝签名凭据，签名文件不能覆盖公开配置。本地未签名 Mac 构建保留无需配置的行为。
 
 运行 `bash apps/desktop/scripts/start-macos-packaging-runner.sh "$HOME/dsh-ci/runner" "$HOME/dsh-ci/packaging" <absolute-node-24-bin-directory> --check` 检查宿主工具和配置文件。脚本同时选择当前 Xcode 及其 macOS SDK，并编译小型链接探针。注册后省略 `--check`，清理继承环境并在前台启动 runner，存活期间阻止空闲睡眠。安装下方服务前，先用 Ctrl-C 停止。runner 拥有 `_work` 下的源码目录，与日常开发分开。该账户可读取签名文件，因此只执行可信代码。沿用现有公证代理恢复规则；强制终止后，先检查保留的恢复记录再构建。新建模板将 `DSH_DESKTOP_MACOS_SIGNATURE_CACHE_DIR` 设为 checkout 外 `cache/macos-signatures` 的绝对路径。已有部署重新运行 setup 后，在各 preset 中补上该字段；已有文件保持不变。这样可跨干净检出保留签名；缓存验证和容量限制见 [macOS 签名](#macos-release-signing)。
 
 
-工作流选项 `skip_notarization` 默认为 `false`；对应 CLI 参数是 `--skip-notarization`。该模式保留 Developer ID 签名、DMG 签名验证和打包运行时验证，跳过 Apple 公证和 stapling，不要求 Apple 公证凭据。DMG／ZIP 文件名带 `-unnotarized`，存放于 `.desktop-build/targets/<target>/unnotarized-artifacts/`，上传产物标为 `unnotarized-debug`。这些产物仅供内部调试：Gatekeeper 可能阻止下载副本运行，不能视为可分发包或用于更新发布。该模式不写入发布完成记录，不能与未签名、Windows 或仅准备构建组合。
+工作流选项 `skip_notarization` 默认为 `false`；对应 CLI 参数是 `--skip-notarization`。在签名机上，该模式保留 Developer ID 签名、DMG 签名验证和打包运行时验证，跳过 Apple 公证和 stapling，不要求 Apple 公证凭据。DMG／ZIP 文件名带 `-unnotarized`，存放于 `.desktop-build/targets/<target>/unnotarized-artifacts/`，上传产物标为 `unnotarized-debug`。这些产物仅供内部调试：Gatekeeper 可能阻止下载副本运行，不能视为可分发包或用于更新发布。该模式不写入发布完成记录，不能与未签名、Windows 或仅准备构建组合。
+
+托管 macOS 打包选择同一个 `skip_notarization` 输入，但托管 runner 没有证书，因此工作流追加 `--ad-hoc-signing`。该模式使用 macOS 的 ad-hoc 身份（`-`）签名，保留 hardened runtime 与强制签名，并产出分发目录布局：`.desktop-build/targets/<target>/artifacts/deepseek-harness-<version>-mac-<arch>.dmg`。它的 `presets/test.env` 与 `publishing/test.json` 由 `apps/desktop/scripts/hosted-config-command.ts` 依据仓库内的公开值（测试源站、其 COS 桶、本次 dispatch 的 release ID）生成，不读取任何密钥文件，因为 ad-hoc 构建既无 Developer ID 身份也无 Apple 账号。`--ad-hoc-signing` 只能在带 `--skip-notarization` 的 macOS 目标上使用，并拒绝 `--unsigned` 与 `--prepare-only`。若跳过公证但仍配置了 `CSC_LINK`，则保留 Developer ID 路径及其身份与密码校验。
 
 在 checkout 中，以注册 runner 的同一账户安装用户服务，不使用 `sudo`：
 

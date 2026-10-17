@@ -63,11 +63,17 @@ export function createElectronBuilderConfig(
     throw new Error('desktop package: DSH_DESKTOP_MACOS_SKIP_NOTARIZATION must be 0 or 1')
   }
   if (skipNotarization && (unsigned || resolvedPlatform !== 'darwin')) throw new Error('Skipping notarization requires a signed macOS build')
+  // Ad-hoc signing is macOS's "-" identity: a hosted build verifies like a release build but carries no certificate.
+  if (env.DSH_DESKTOP_AD_HOC_SIGNING !== undefined && !['0', '1'].includes(env.DSH_DESKTOP_AD_HOC_SIGNING)) {
+    throw new Error('desktop package: DSH_DESKTOP_AD_HOC_SIGNING must be 0 or 1')
+  }
+  const adHocSigning = env.DSH_DESKTOP_AD_HOC_SIGNING === '1'
+  if (adHocSigning && (!skipNotarization || unsigned)) throw new Error('Ad-hoc signing requires the macOS skip-notarization build')
   const packagesMacOS = targetPlatform === 'darwin' || (targetPlatform === undefined && hostPlatform === 'darwin')
   const packagesWindows = resolvedPlatform === 'win32'
   const policy = packagesMacOS && unsigned ? undefined : resolveDesktopPolicyEnvironment(env)
   if (resolvedPlatform === 'win32') installWindowsDirectoryInstaller()
-  const macOSSigning = packagesMacOS && !unsigned ? resolveMacOSSigningEnvironment(env) : undefined
+  const macOSSigning = packagesMacOS && !unsigned && !adHocSigning ? resolveMacOSSigningEnvironment(env) : undefined
   if (packagesMacOS && !unsigned && !skipNotarization) resolveMacOSNotarizationEnvironment(env)
   const buildPaths = desktopTargetBuildPaths(resolveDesktopBuildTarget(env, hostPlatform, hostArch))
   const output = desktopArtifactOutput(buildPaths, { unsigned, skipNotarization })
@@ -162,7 +168,7 @@ export function createElectronBuilderConfig(
       // macOS matches the application locale against this bundle, not Electron Framework resources.
       extendInfo: { CFBundleLocalizations: ['en', 'zh_CN'] },
       // Ad-hoc signing keeps the modified Electron executable runnable without a Developer ID.
-      identity: unsigned ? '-' : macOSSigning?.signingIdentity,
+      identity: unsigned || adHocSigning ? '-' : macOSSigning?.signingIdentity,
       forceCodeSigning: !unsigned,
       hardenedRuntime: true,
       extendInfo: { NSMicrophoneUsageDescription: 'DeepSeek Harness uses your microphone to transcribe speech into message drafts.' },
@@ -221,12 +227,13 @@ export function createElectronBuilderConfig(
         await verifyMacOSAppUpdateConfig(appPath, resolveMacOSAppUpdateFeed(context.packager.config.publish),
           context.packager.appInfo.updaterCacheDirName)
       }
-      verifyMacOSSignatureAfterSign(context, macOSSigning ?? resolveMacOSSigningEnvironment(env))
+      // An ad-hoc build has no release identity to compare against; electron-builder's own seal is the result.
+      if (!adHocSigning) verifyMacOSSignatureAfterSign(context, macOSSigning ?? resolveMacOSSigningEnvironment(env))
     },
     artifactBuildCompleted: artifact => {
       if (unsigned || !artifact.file.endsWith('.dmg')) return
       if (skipNotarization) {
-        verifyMacOSDiskImageSignature(artifact.file, macOSSigning ?? resolveMacOSSigningEnvironment(env))
+        if (!adHocSigning) verifyMacOSDiskImageSignature(artifact.file, macOSSigning ?? resolveMacOSSigningEnvironment(env))
         return
       }
       return notarizeMacOSDiskImageArtifact(

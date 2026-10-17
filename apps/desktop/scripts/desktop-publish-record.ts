@@ -28,17 +28,21 @@ export async function withDesktopChannelLock<T>(root: string, destination: strin
 /** Terminal states a journal can settle on; the two pending states name the only remaining recovery. */
 export type DesktopPublicationStatus = 'complete' | 'preview' | 'failed' | 'published-tag-pending' | 'release-mirror-pending'
 
+/** Terminal states a mirror record can settle on; `release-mirror-pending` waits for one more mirror retry. */
+export type DesktopMirrorStatus = 'complete' | 'release-mirror-pending' | 'failed'
+
 /**
  * Events that finish every remote write the automation owns, so only mirroring remains outstanding.
  * A journal carrying one of them can be retried without repackaging, re-uploading COS or touching the feeds.
+ * Legacy journals named the mirror retry here before the mirror owned its record.
  */
-const COMPLETED_WRITES = new Set(['feeds-complete', 'mirror-pending', 'mirror-complete'])
+const COMPLETED_WRITES = new Set(['feeds-complete', 'complete', 'mirror-pending', 'mirror-complete'])
 
 /** An operation journal retained independently of disposable checkout and artifact files. */
-export interface DesktopPublicationRecord {
+export interface DesktopPublicationRecord<Status extends string = DesktopPublicationStatus> {
   readonly directory: string
   record(event: DesktopPublishEvent): Promise<void>
-  finish(status: DesktopPublicationStatus): Promise<void>
+  finish(status: Status): Promise<void>
 }
 
 /**
@@ -47,10 +51,10 @@ export interface DesktopPublicationRecord {
  * @param identity Public source, actor and destination metadata; never pass credentials.
  * @returns Durable event writer and explicit terminal-status writer.
  */
-export async function createDesktopPublicationRecord(
+export async function createDesktopPublicationRecord<Status extends string = DesktopPublicationStatus>(
   root: string,
   identity: { repository: string; runId: string; attempt: string; actor: string; destination: string; operation: 'publish' | 'rollback' | 'mirror'; reason: string },
-): Promise<DesktopPublicationRecord> {
+): Promise<DesktopPublicationRecord<Status>> {
   await mkdir(root, { recursive: true, mode: 0o700 })
   const staging = await mkdtemp(join(root, '.initializing-'))
   const directory = join(root, `${identity.operation}-${basename(staging).slice('.initializing-'.length)}`)
@@ -70,10 +74,64 @@ export async function createDesktopPublicationRecord(
       await appendFile(join(directory, 'events.jsonl'), `${JSON.stringify({ ...event, at: new Date().toISOString() })}\n`, { flush: true })
     },
     async finish(status) {
-      await writeFile(join(directory, 'result.json'), `${JSON.stringify({ status,
-        startedAt, finishedAt: new Date().toISOString() })}\n`, { flag: 'wx', mode: 0o600, flush: true })
+      await writeTerminalResult(directory, status, startedAt)
     },
   }
+}
+
+/**
+ * Replace the terminal state of this attempt's mirror record, keeping earlier attempts beside it.
+ * @param root Persistent publication journal root; the same root that holds the publication records.
+ * @param identity Exact source, destination and channel of the attempt whose mirror state is synchronised.
+ * @param status New terminal state of the mirror: `complete`, `release-mirror-pending` or `failed`.
+ * @returns Number of records whose state changed, so a caller can report an audit-only repair.
+ * Each mirror directory keeps its own start time and events; `result.json` alone is rewritten in place, and the
+ * replaced bytes are retained as `result.<previous-status>.json` so the earlier verdict remains readable.
+ */
+export async function settleDesktopMirrorRecords(root: string, identity: {
+  repository: string
+  runId: string
+  attempt: string
+  destination: string
+}, status: DesktopMirrorStatus): Promise<number> {
+  let entries
+  try { entries = await readdir(root, { withFileTypes: true }) } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return 0
+    throw error
+  }
+  let settled = 0
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isDirectory() || !entry.name.startsWith('mirror-')) continue
+    const directory = join(root, entry.name)
+    const operation = await readOptionalJson(join(directory, 'operation.json'))
+    if (operation === undefined) continue
+    const parsed = z.object({ operation: z.literal('mirror'), repository: z.string(), runId: z.string(),
+      attempt: z.string(), destination: z.string(), startedAt: z.string() }).parse(operation)
+    if (parsed.repository !== identity.repository || parsed.runId !== identity.runId
+      || parsed.attempt !== identity.attempt || parsed.destination !== identity.destination) continue
+    const previous = z.object({ status: z.string() }).safeParse(await readOptionalJson(join(directory, 'result.json')))
+    if (previous.success && previous.data.status === status) continue
+    if (previous.success) {
+      // Rename, not overwrite: the superseded verdict stays auditable under its own status name.
+      await rename(join(directory, 'result.json'), join(directory, `result.${previous.data.status}.json`))
+    }
+    await writeTerminalResult(directory, status, parsed.startedAt)
+    settled += 1
+  }
+  return settled
+}
+
+async function readOptionalJson(path: string): Promise<unknown> {
+  try { return JSON.parse(await readFile(path, 'utf8')) } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined
+    throw error
+  }
+}
+
+/** Write the terminal state of one attempt so a later writer can replace it without touching its events. */
+async function writeTerminalResult(directory: string, status: string, startedAt: string): Promise<void> {
+  await writeFile(join(directory, 'result.json'), `${JSON.stringify({ status,
+    startedAt, finishedAt: new Date().toISOString() })}\n`, { mode: 0o600, flush: true })
 }
 
 /**

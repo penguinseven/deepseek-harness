@@ -37,9 +37,20 @@ async function releaseDirectory(names: readonly string[]): Promise<{ root: strin
   return { root, assets }
 }
 
-/** GitHub stub whose Release and asset state persists across calls, so a retry sees the first attempt's uploads. */
-function githubStub(options: { releases?: 'absent' | 'present'; foreignAssets?: Record<string, number> } = {}) {
-  const assets = new Map<string, number>(Object.entries(options.foreignAssets ?? {}))
+/**
+ * GitHub stub whose Release and asset state persists across calls, so a retry sees the first attempt's uploads.
+ * `foreignAssets` plants files under approved names; `digests` controls whether the listing reports `digest`,
+ * and `downloads` records which assets were read back because their listing carried none.
+ */
+function githubStub(options: {
+  releases?: 'absent' | 'present'
+  foreignAssets?: Record<string, Buffer | number>
+  digests?: 'reported' | 'absent'
+} = {}) {
+  const digests = options.digests ?? 'reported'
+  const assets = new Map<string, Buffer>(Object.entries(options.foreignAssets ?? {})
+    .map(([name, value]) => [name, typeof value === 'number' ? Buffer.alloc(value) : value]))
+  const downloads: string[] = []
   const calls: string[] = []
   let created = false
   const respond = (status: number, body?: unknown): Response =>
@@ -60,16 +71,26 @@ function githubStub(options: { releases?: 'absent' | 'present'; foreignAssets?: 
         upload_url: 'https://uploads.github.com/repos/owner/repo/releases/7/assets{?name,label}' })
     }
     if (method === 'GET' && url.endsWith('/releases/7/assets')) {
-      return respond(200, { assets: [...assets].map(([name, size], index) => ({ id: index + 1, name, size })) })
+      return respond(200, { assets: [...assets].map(([name, content], index) => ({
+        id: index + 1, name, size: content.length,
+        ...digests === 'reported' ? { digest: `sha256:${sha256(content)}` } : {},
+      })) })
+    }
+    if (method === 'GET' && url.includes('/releases/assets/')) {
+      const id = Number(url.slice(url.lastIndexOf('/') + 1))
+      const entry = [...assets.entries()][id - 1]
+      if (entry === undefined) return respond(404, { message: 'Not Found' })
+      downloads.push(entry[0])
+      return new Response(new Uint8Array(entry[1]), { status: 200 })
     }
     if (method === 'POST' && url.startsWith('https://uploads.github.com/repos/owner/repo/releases/7/assets')) {
       const name = new URL(url).searchParams.get('name')!
-      assets.set(name, Buffer.from(init!.body as Buffer).length)
-      return respond(201, { id: assets.size + 10, name, size: assets.get(name) })
+      assets.set(name, Buffer.from(init!.body as Buffer))
+      return respond(201, { id: assets.size + 10, name, size: assets.get(name)!.length })
     }
     return respond(500, { message: 'unexpected request' })
   }
-  return { request, calls, assets }
+  return { request, calls, assets, downloads }
 }
 
 it('creates the Release for the published tag and uploads every approved file once', async () => {
@@ -89,7 +110,8 @@ it('creates the Release for the published tag and uploads every approved file on
 it('retries idempotently: a second run confirms existing assets and uploads only what is missing', async () => {
   const { root, assets } = await releaseDirectory(['installer.exe', 'latest.yml', 'installer.exe.blockmap'])
   try {
-    const github = githubStub({ releases: 'absent', foreignAssets: { 'installer.exe': bytes('installer.exe').length } })
+    // The planted file holds the approved bytes, so only the digest makes it trustworthy.
+    const github = githubStub({ releases: 'absent', foreignAssets: { 'installer.exe': bytes('installer.exe') } })
     const first = await mirrorDesktopRelease({ repository: 'owner/repo', version: '1.0.0', assets,
       token: 'app-token', request: github.request })
     expect(first.uploaded).toEqual(['latest.yml', 'installer.exe.blockmap'])
@@ -111,7 +133,68 @@ it('rejects an existing asset of a different size instead of overwriting publish
     await expect(mirrorDesktopRelease({ repository: 'owner/repo', version: '1.0.0', assets,
       token: 'app-token', request: github.request }))
       .rejects.toThrow('already exists with 1 bytes instead of the approved')
-    expect(github.assets.get('installer.exe')).toBe(1)
+    expect(github.assets.get('installer.exe')).toEqual(Buffer.alloc(1))
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('rejects a same-size asset whose reported digest differs instead of confirming it', async () => {
+  const { root, assets } = await releaseDirectory(['installer.exe'])
+  try {
+    const impostor = Buffer.from('payload of installer.exE')
+    // Same byte length as the approved file, different contents: only the digest exposes the substitution.
+    expect(impostor.length).toBe(bytes('installer.exe').length)
+    const github = githubStub({ foreignAssets: { 'installer.exe': impostor } })
+    await expect(mirrorDesktopRelease({ repository: 'owner/repo', version: '1.0.0', assets,
+      token: 'app-token', request: github.request }))
+      .rejects.toThrow(`already exists with SHA-256 sha256:${sha256(impostor)} instead of the approved ${sha256(bytes('installer.exe'))}`)
+    expect(github.assets.get('installer.exe')).toEqual(impostor)
+    expect(github.calls.some(call => call.startsWith('POST'))).toBe(false)
+    expect(github.downloads).toEqual([])
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('reads a same-size asset back when the listing reports no digest', async () => {
+  const { root, assets } = await releaseDirectory(['installer.exe'])
+  try {
+    const impostor = Buffer.from('payload of installer.exE')
+    const github = githubStub({ foreignAssets: { 'installer.exe': impostor }, digests: 'absent' })
+    await expect(mirrorDesktopRelease({ repository: 'owner/repo', version: '1.0.0', assets,
+      token: 'app-token', request: github.request }))
+      .rejects.toThrow(`already exists with SHA-256 ${sha256(impostor)} instead of the approved`)
+    expect(github.downloads).toEqual(['installer.exe'])
+    expect(github.calls.some(call => call.startsWith('POST'))).toBe(false)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('confirms an older same-size asset by reading identical bytes back', async () => {
+  const { root, assets } = await releaseDirectory(['installer.exe'])
+  try {
+    const github = githubStub({ foreignAssets: { 'installer.exe': bytes('installer.exe') }, digests: 'absent' })
+    const result = await mirrorDesktopRelease({ repository: 'owner/repo', version: '1.0.0', assets,
+      token: 'app-token', request: github.request })
+    expect(result.uploaded).toEqual([])
+    expect(result.present).toEqual(['installer.exe'])
+    expect(github.downloads).toEqual(['installer.exe', 'installer.exe'])
+    expect(github.calls.some(call => call.startsWith('POST'))).toBe(false)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('rejects an upload that stored other bytes than the approved file', async () => {
+  const { root, assets } = await releaseDirectory(['installer.exe'])
+  try {
+    const upload = githubStub()
+    const request: typeof fetch = async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input)
+      if ((init?.method ?? 'GET') === 'POST' && url.startsWith('https://uploads.github.com/')) {
+        // A truncated upload reports 201; only the read-back digest catches it.
+        upload.assets.set(new URL(url).searchParams.get('name')!, Buffer.from('payload of installer.exE'))
+        return new Response(JSON.stringify({ id: 99 }), { status: 201 })
+      }
+      return upload.request(input, init)
+    }
+    await expect(mirrorDesktopRelease({ repository: 'owner/repo', version: '1.0.0', assets,
+      token: 'app-token', request }))
+      .rejects.toThrow('already exists with SHA-256')
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 

@@ -3,8 +3,10 @@ import { execFile } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import { z } from 'zod'
 import { expect, it } from 'vitest'
-import { createDesktopPublicationRecord, wasDesktopAttemptPublished, withDesktopChannelLock } from '../scripts/desktop-publish-record.ts'
+import { createDesktopPublicationRecord, settleDesktopMirrorRecords, wasDesktopAttemptPublished,
+  withDesktopChannelLock, type DesktopMirrorStatus } from '../scripts/desktop-publish-record.ts'
 
 it('excludes another process while a channel lock is held and admits it after release', async () => {
   const root = await mkdtemp(join(tmpdir(), 'desktop-process-lock-'))
@@ -76,6 +78,48 @@ it('ignores interrupted initialization before an audit directory becomes visible
     const record = await createDesktopPublicationRecord(root, { ...identity, actor: 'fixture', operation: 'publish', reason: 'fixture' })
     await record.record({ type: 'feeds-complete' })
     expect(await wasDesktopAttemptPublished(root, identity)).toBe(true)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('keeps a settled publication complete so a mirror retry never needs the feeds', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'desktop-publish-complete-'))
+  try {
+    const identity = { repository: 'owner/repo', runId: '40', attempt: '1', destination: 'bucket/win' }
+    const journal = await createDesktopPublicationRecord(root, { ...identity, actor: 'operator', operation: 'publish', reason: 'publish' })
+    await journal.record({ type: 'feeds-complete' })
+    await journal.record({ type: 'complete' })
+    await journal.finish('complete')
+    // The publication owns COS, the feeds and the tag only; its own terminal state never mentions the mirror.
+    expect(JSON.parse(await readFile(join(journal.directory, 'result.json'), 'utf8'))).toMatchObject({ status: 'complete' })
+    const events = (await readFile(join(journal.directory, 'events.jsonl'), 'utf8')).trim().split('\n')
+    expect(events.map(event => z.object({ type: z.string() }).parse(JSON.parse(event)).type))
+      .toEqual(['feeds-complete', 'complete'])
+    expect(await wasDesktopAttemptPublished(root, identity)).toBe(true)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('settles every mirror record of one attempt complete and keeps the replaced verdicts', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'desktop-mirror-settle-'))
+  try {
+    const identity = { repository: 'owner/repo', runId: '41', attempt: '2', destination: 'bucket/mac-nightly' }
+    const first = await createDesktopPublicationRecord(root, { ...identity, actor: 'operator', operation: 'mirror', reason: 'mirror' })
+    await first.record({ type: 'mirror-pending', failure: { phase: 'GitHub Release mirroring', code: 'operation-failed', message: 'desktop mirror: cannot create the Release' } })
+    await first.finish('release-mirror-pending')
+    const retry = await createDesktopPublicationRecord<DesktopMirrorStatus>(
+      root, { ...identity, actor: 'operator', operation: 'mirror', reason: 'mirror retry' })
+    await retry.record({ type: 'mirror-complete' })
+    await retry.finish('complete')
+    expect(await settleDesktopMirrorRecords(root, identity, 'complete')).toBe(1)
+    expect(JSON.parse(await readFile(join(retry.directory, 'result.json'), 'utf8'))).toMatchObject({ status: 'complete' })
+    // The earlier attempt keeps its evidence: the pending events survive and its replaced verdict is renamed.
+    expect(JSON.parse(await readFile(join(first.directory, 'result.json'), 'utf8'))).toMatchObject({ status: 'complete' })
+    expect(JSON.parse(await readFile(join(first.directory, 'result.release-mirror-pending.json'), 'utf8')))
+      .toMatchObject({ status: 'release-mirror-pending' })
+    const events = (await readFile(join(first.directory, 'events.jsonl'), 'utf8')).trim().split('\n')
+    expect(JSON.parse(events[0]!)).toMatchObject({ type: 'mirror-pending' })
+    // Settling is idempotent and never touches another attempt or the publication record.
+    expect(await settleDesktopMirrorRecords(root, identity, 'complete')).toBe(0)
+    expect(await settleDesktopMirrorRecords(root, { ...identity, attempt: '3' }, 'complete')).toBe(0)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 

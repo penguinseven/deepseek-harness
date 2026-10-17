@@ -5,6 +5,7 @@ import yaml from 'js-yaml'
 import { expect, it } from 'vitest'
 
 const workflowPath = resolve(import.meta.dirname, '../.github/workflows/desktop-publish.yml')
+const script = readFileSync(resolve(import.meta.dirname, '../apps/desktop/scripts/publish-desktop-ci.ts'), 'utf8')
 const source = readFileSync(workflowPath, 'utf8')
 const workflow = yaml.load(source) as {
   on: Record<string, unknown>
@@ -104,9 +105,11 @@ it('downloads the selected artifact before verifying it without an Environment',
   })
   const check = prepare.steps.find(step => step.id === 'check')!
   expect(check.run).toBe('node --import tsx apps/desktop/scripts/publish-desktop-ci.ts --check')
+  // `--check` reads no upload credential, but it does resolve the destination the approval authorizes.
   expect(check.env).toEqual({
     DESKTOP_PUBLISH_ROUTE: '${{ needs.route.outputs.selection }}',
     DESKTOP_ARTIFACT_BUNDLE_DIR: '${{ github.workspace }}/desktop-publisher/artifact-bundle',
+    DSH_PUBLISH_CONFIG_JSON: '${{ secrets.DSH_PUBLISH_CONFIG_JSON }}',
   })
   expect(prepare.steps.some(step => step.id === 'key' || step.id === 'app')).toBe(false)
   expect(workflow.jobs.publish!.needs).toEqual(['route', 'prepare'])
@@ -130,6 +133,12 @@ it('loads upload credentials only in the approved publish job', () => {
     DSH_COS_CREDENTIALS_JSON: '${{ secrets.DSH_COS_CREDENTIALS_JSON }}',
     DSH_DESKTOP_PUBLISH_STATE_DIR: '${{ runner.temp }}',
   })
+  // Every step that resolves the deployment configuration names where it comes from; none invents a config root.
+  for (const job of [workflow.jobs.publish!, workflow.jobs.mirror!]) {
+    const check = job.steps.find(step => step.id === 'check')!
+    expect(check.env?.DSH_PUBLISH_CONFIG_JSON).toBe('${{ secrets.DSH_PUBLISH_CONFIG_JSON }}')
+    expect(Object.keys(check.env ?? {})).not.toContain('DSH_PACKAGING_CONFIG_DIR')
+  }
   const audit = publish.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'))!
   expect(audit.if).toBe("always() && steps.publish.outputs.record != ''")
   expect(audit.with).toMatchObject({
@@ -150,6 +159,28 @@ it('accepts master or main dispatch and rejects other refs', () => {
     expect(result.status).toBe(ref === 'refs/heads/stale-feature' ? 1 : 0)
     if (result.status !== 0) expect(result.stderr).toContain('must be dispatched from')
   }
+})
+
+it('leaves the publication complete so only the mirror job can retry the Release', () => {
+  const publish = workflow.jobs.publish!.steps.find(step => step.id === 'publish')!
+  // One phase per job: --publish owns COS, the feeds and the tag, and never runs the mirror inline.
+  expect(publish.run).toBe('node --import tsx apps/desktop/scripts/publish-desktop-ci.ts --publish')
+  const mirror = workflow.jobs.mirror!
+  expect(mirror.steps.find(step => step.id === 'mirror')!.run)
+    .toBe('node --import tsx apps/desktop/scripts/publish-desktop-ci.ts --mirror')
+  // A failed mirror must leave a retryable path: the mirror job depends on a successful publication and
+  // reports its own result, so re-running only this job re-executes the mirror and nothing else.
+  expect(mirror.needs).toEqual(['route', 'prepare', 'publish'])
+  expect(mirror.if).toContain("needs.publish.result == 'success'")
+  // The publish branch must not settle its own journal on the mirror's outcome: only --mirror writes that.
+  const publishBranch = script.slice(script.indexOf("phase = 'upload credential loading'"))
+  expect(publishBranch).not.toContain('mirrorDesktopRelease')
+  expect(publishBranch).not.toContain("type: 'mirror-pending'")
+  expect(publishBranch).toContain("await journal.record({ type: 'complete' })")
+  // The mirror branch re-proves the attempt published before it creates a Release.
+  const mirrorBranch = script.slice(script.indexOf("mode === '--mirror'"), script.indexOf("phase = 'upload credential loading'"))
+  expect(mirrorBranch).toContain('wasDesktopAttemptPublished')
+  expect(mirrorBranch).toContain('settleDesktopMirrorRecords')
 })
 
 it('mirrors the approved bytes after publication without any upload credential', () => {
@@ -182,8 +213,9 @@ it('mirrors the approved bytes after publication without any upload credential',
     DSH_DESKTOP_PUBLISH_STATE_DIR: '${{ runner.temp }}',
   })
   for (const step of mirror.steps) {
+    // No COS credential anywhere, and the public destination settings only on the verification step.
     expect(Object.keys(step.env ?? {})).not.toContain('DSH_COS_CREDENTIALS_JSON')
-    expect(Object.keys(step.env ?? {})).not.toContain('DSH_PUBLISH_CONFIG_JSON')
+    if (step.id !== 'check') expect(Object.keys(step.env ?? {})).not.toContain('DSH_PUBLISH_CONFIG_JSON')
   }
   expect(mirror.steps.find(step => step.id === 'app')?.with).toMatchObject({ 'permission-contents': 'write' })
 })

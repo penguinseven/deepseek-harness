@@ -238,7 +238,7 @@ it('rejects an explicit invalid macOS cache before signing while leaving unsigne
   expect(() => { validateDesktopPackageEnvironment(environment, MACOS, { unsigned: true }) }).not.toThrow()
 })
 
-it('skips Apple credentials but still requires signing credentials for unnotarized packages', async () => {
+it('requires signing material for an unnotarized Developer ID build and none for an ad-hoc build', async () => {
   await withDirectory(async (directory) => {
     const certificate = join(directory, 'signing.p12')
     await writeFile(certificate, 'fixture')
@@ -246,10 +246,16 @@ it('skips Apple credentials but still requires signing credentials for unnotariz
     expect(() => { validateDesktopPackageEnvironment(environment, MACOS, { skipNotarization: true }) }).not.toThrow()
     expect(() => { validateDesktopPackageEnvironment(environment, MACOS) }).toThrow()
     expect(() => {
-      validateDesktopPackageEnvironment({ ...environment, CSC_LINK: undefined }, MACOS, { skipNotarization: true })
-    }).toThrow(/CSC_LINK/u)
-    expect(() => {
       validateDesktopPackageEnvironment({ ...environment, CSC_KEY_PASSWORD: undefined }, MACOS, { skipNotarization: true })
     }).toThrow(/CSC_KEY_PASSWORD/u)
+    // Without a certificate the build is ad hoc: no Apple account, no p12, no Developer ID identity.
+    expect(() => {
+      validateDesktopPackageEnvironment({ ...RELEASE }, MACOS, { skipNotarization: true })
+    }).not.toThrow()
+    // A present certificate needs the Developer ID identity and its export password, so a half-configured
+    // signing machine fails loudly instead of silently producing an ad-hoc build.
+    expect(() => {
+      validateDesktopPackageEnvironment({ ...RELEASE, CSC_LINK: certificate }, MACOS, { skipNotarization: true })
+    }).toThrow(/DSH_DESKTOP_MACOS_SIGNING_IDENTITY/u)
   })
 })
