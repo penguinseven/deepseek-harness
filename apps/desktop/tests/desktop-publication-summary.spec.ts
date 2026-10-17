@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { expect, it } from 'vitest'
 import type { DesktopArtifactManifest } from '../scripts/desktop-artifact-bundle.ts'
-import { desktopPublicationSummary } from '../scripts/desktop-publication-summary.ts'
+import { desktopMirrorOutcomeSummary, desktopPublicationOutcomeSummary, desktopPublicationSummary } from '../scripts/desktop-publication-summary.ts'
 import type { DesktopUploadPlan } from '../scripts/desktop-upload-plan.ts'
 
 const manifest: DesktopArtifactManifest = {
@@ -61,4 +61,38 @@ it('fails instead of rendering success when an upload file cannot be read', asyn
     artifacts: [{ path: '/missing-desktop-summary-artifact/installer.exe', filename: 'installer.exe',
       key: 'installer.exe', contentType: 'application/octet-stream', channelMetadata: false }],
   }, 'c'.repeat(64))).rejects.toThrow()
+})
+
+it('reports COS, feed, tag and the separate mirror phase after publication', () => {
+  const complete = desktopPublicationOutcomeSummary(plan, { runId: '20', attempt: '3' }, 'complete', 'production')
+  expect(complete).toContain('Status: **complete**')
+  expect(complete).toContain('COS + update feed: **complete**')
+  expect(complete).toContain('desktop-v1.0.0')
+  expect(complete).toContain('独立 mirror job')
+  expect(complete).toContain('https&#58;//download.example.com/dsh-desk/feeds/win-x64/latest.yml')
+
+  const pending = desktopPublicationOutcomeSummary(plan, { runId: '20', attempt: '3' }, 'published-tag-pending', 'production')
+  expect(pending).toContain('Git tag: **pending**')
+  expect(pending).toContain('COS + update feed: **complete**（Git tag 待补）')
+})
+
+it('distinguishes a completed mirror from release-mirror-pending', () => {
+  const complete = desktopMirrorOutcomeSummary(plan, manifest, {
+    status: 'complete', releaseUrl: 'https://github.com/owner/repo/releases/tag/desktop-v1.0.0',
+    uploaded: 2, present: 1, repaired: 1,
+  })
+  expect(complete).toContain('Status: **complete**')
+  expect(complete).toContain('Uploaded this run: 2')
+  expect(complete).toContain('Earlier mirror records settled: 1')
+  expect(complete).toContain('were not modified')
+
+  const pending = desktopMirrorOutcomeSummary(plan, manifest, {
+    status: 'release-mirror-pending',
+    failure: { phase: 'GitHub Release mirroring', code: 'validation', message: 'desktop mirror: <script> cannot upload' },
+  })
+  expect(pending).toContain('Status: **release-mirror-pending**')
+  expect(pending).toContain('GitHub Release mirroring')
+  expect(pending).toContain('Retry the `mirror` job only')
+  expect(pending).not.toContain('<script>')
+  expect(pending).toContain('&#60;script&#62;')
 })

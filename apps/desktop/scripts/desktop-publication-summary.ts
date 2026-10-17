@@ -1,5 +1,7 @@
-/** Render the verified publication plan for GitHub's native deployment reviewers. */
+/** Render verified publication plans, approval details and terminal outcomes for GitHub summaries. */
 import type { DesktopArtifactManifest } from './desktop-artifact-bundle.ts'
+import type { DesktopPublicationStatus } from './desktop-publish-record.ts'
+import { desktopReleaseTag } from './desktop-release-tag.ts'
 import { digestDesktopUploadArtifacts, type DesktopUploadPlan } from './desktop-upload-plan.ts'
 
 function text(value: string): string {
@@ -9,6 +11,101 @@ function text(value: string): string {
 function code(value: string): string { return `<code>${text(value)}</code>` }
 function row(label: string, value: string): string { return `| ${label} | ${value} |` }
 function link(url: string, label = url): string { return `<a href="${text(url)}">${text(label)}</a>` }
+
+/** Routed package identity a post-publication summary cross-checks. */
+export interface DesktopPublicationOutcomeSource {
+  readonly runId: string
+  readonly attempt: string
+}
+
+/** Terminal mirror outcome a run summary reports; only `release-mirror-pending` needs a retry. */
+export type DesktopMirrorOutcome =
+  | {
+    readonly status: 'complete'
+    readonly releaseUrl: string
+    readonly uploaded: number
+    readonly present: number
+    /** Earlier mirror records this retry settled in the same persistent root. */
+    readonly repaired?: number
+  }
+  | {
+    readonly status: 'release-mirror-pending'
+    readonly failure: { readonly phase: string; readonly code: string; readonly message: string }
+  }
+
+/**
+ * Render what COS, the update feed and the tag did after publication finishes.
+ * @param plan Validated upload plan naming the target, version and deployment.
+ * @param selection Routed package identity the publication used.
+ * @param status Terminal publication state reached by this invocation.
+ * @param preset Packaging preset the bundle declared; only production publishes a Release to mirror.
+ * @returns Markdown that names the completed writes and leaves the mirror to its own job summary.
+ * A mirror failure is reported by the mirror job, so this summary never claims its result.
+ */
+export function desktopPublicationOutcomeSummary(
+  plan: DesktopUploadPlan, selection: DesktopPublicationOutcomeSource,
+  status: DesktopPublicationStatus, preset: 'test' | 'production',
+): string {
+  const origin = new URL(plan.publicUrl).origin
+  const feeds = plan.artifacts.filter(file => file.channelMetadata)
+    .map(file => `${origin}/${file.key.split('/').map(encodeURIComponent).join('/')}`)
+  const writes = status === 'complete' || status === 'release-mirror-pending'
+    ? '**complete**'
+    : status === 'published-tag-pending' ? '**complete**（Git tag 待补）' : `**${status}**`
+  const tag = plan.environment === 'test'
+    ? '不创建（test 环境）'
+    : status === 'published-tag-pending' ? `**pending**（${code(`desktop-v${plan.version}`)}）` : code(`desktop-v${plan.version}`)
+  const mirror = preset === 'test'
+    ? '不创建（test 环境）'
+    : status === 'release-mirror-pending'
+      ? '**release-mirror-pending**（见 mirror journal）'
+      : '独立 mirror job；结果见该 job 的 step summary 与 journal'
+  return [
+    '', '## Desktop publication', '',
+    `- Status: **${status}**`,
+    `- Target: ${code(plan.target)} ${code(plan.version)}`,
+    `- Source: run ${code(selection.runId)}, attempt ${code(selection.attempt)}`,
+    `- COS + update feed: ${writes}`,
+    ...(feeds.length > 0 ? [`- Feed: ${feeds.map(url => link(url)).join('<br>')}`] : []),
+    `- Git tag: ${tag}`,
+    `- GitHub Release: ${mirror}`, '',
+  ].join('\n')
+}
+
+/**
+ * Render one mirror invocation, including the pending state a failed retry leaves behind.
+ * @param plan Validated upload plan naming the target, version and deployment.
+ * @param manifest Verified bundle manifest naming the channel.
+ * @param outcome Terminal state and either the Release URL or the failure that needs a retry.
+ * @returns Markdown that distinguishes completion from `release-mirror-pending` and its retry.
+ * COS, the feed and the tag are named as untouched because this phase must never rewrite them.
+ */
+export function desktopMirrorOutcomeSummary(
+  plan: DesktopUploadPlan, manifest: DesktopArtifactManifest, outcome: DesktopMirrorOutcome,
+): string {
+  const lines = [
+    '', '## Desktop release mirror', '',
+    `${code(plan.target)} ${code(plan.version)} → ${code(desktopReleaseTag(plan.version))}（通道 ${code(manifest.build.channel)}）`, '',
+    `- Status: **${outcome.status}**`,
+  ]
+  if (outcome.status === 'complete') {
+    lines.push(
+      `- GitHub Release: ${link(outcome.releaseUrl)}`,
+      `- Uploaded this run: ${outcome.uploaded}`,
+      `- Already present: ${outcome.present}`,
+      ...(outcome.repaired === undefined ? [] : [`- Earlier mirror records settled: ${outcome.repaired}`]), '',
+      'COS, the update feed and the Git tag were not modified by this step.', '',
+    )
+  } else {
+    lines.push(
+      `- Phase: ${code(outcome.failure.phase)}`,
+      `- Code: ${code(outcome.failure.code)}`,
+      `- Message: ${text(outcome.failure.message)}`, '',
+      'Retry the `mirror` job only. COS, the update feed and the Git tag remain published and must not be rewritten or rolled back.', '',
+    )
+  }
+  return lines.join('\n')
+}
 
 /**
  * Render Chinese approval details after bundle, destination and evidence verification succeeds.
