@@ -254,7 +254,11 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === import.meta.fi
       let status: DesktopMirrorStatus = 'failed'
       try {
         phase = 'GitHub Release mirroring'
+        const feed = plan.artifacts.find(artifact => artifact.channelMetadata)
+        if (feed === undefined) throw new Error('desktop publish: the upload plan carries no update feed')
+        const feedUrl = `${new URL(plan.publicUrl).origin}/${feed.key.split('/').map(encodeURIComponent).join('/')}`
         const result = await mirrorDesktopRelease({ repository: manifest.repository, version: plan.version,
+          notes: { target: manifest.build.target, sourceSha: manifest.source.sha, approvalDigest: approval, feedUrl },
           assets: desktopReleaseAssets(manifest, bundle.releaseDirectory), token: mirrorToken })
         await record.record({ type: 'mirror-complete' })
         status = 'complete'

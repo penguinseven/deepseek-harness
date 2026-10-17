@@ -27,6 +27,18 @@ export interface DesktopReleaseAsset {
   readonly sha256: string
 }
 
+/** Facts the mirrored Release states about the approved publication it copies. */
+export interface DesktopReleaseNotes {
+  /** Package target named by the bundle manifest. */
+  readonly target: string
+  /** Commit the approved bytes were packaged from. */
+  readonly sourceSha: string
+  /** Approval digest covering the manifest, its evidence and the upload plan. */
+  readonly approvalDigest: string
+  /** Public URL of the update feed this publication replaced. */
+  readonly feedUrl: string
+}
+
 /** Result of mirroring one publication; `complete` also covers a Release that already held every asset. */
 export interface DesktopReleaseMirrorResult {
   readonly status: 'complete'
@@ -37,7 +49,19 @@ export interface DesktopReleaseMirrorResult {
   readonly present: readonly string[]
 }
 
-const releaseSchema = z.object({ id: z.number().int().positive(), html_url: z.string().min(1), upload_url: z.string().min(1) })
+const releaseSchema = z.object({
+  id: z.number().int().positive(),
+  html_url: z.string().min(1),
+  upload_url: z.string().min(1),
+  body: z.string().nullish(),
+})
+const versionSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9.+-]*$/u)
+const releaseNotesSchema = z.strictObject({
+  target: z.enum(['mac-arm64', 'mac-x64', 'win-x64']),
+  sourceSha: z.string().regex(/^[a-f0-9]{40}$/u),
+  approvalDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+  feedUrl: z.string().min(1),
+})
 /** One listed asset; GitHub reports `digest` as `sha256:<hex>` for assets uploaded since 2025. */
 const assetSchema = z.object({
   id: z.number().int().positive(),
@@ -54,6 +78,8 @@ interface ReleaseTarget {
   readonly id: number
   readonly htmlUrl: string
   readonly uploadUrl: string
+  /** Notes GitHub currently stores for the Release, or null when it has none. */
+  readonly body: string | null
 }
 
 /** Release lookup result: an existing Release, or confirmation GitHub holds none for this tag yet. */
@@ -93,7 +119,37 @@ async function findRelease(
 /** Read one Release identity from a GitHub Release body. */
 function releaseTarget(body: unknown): ReleaseTarget {
   const release = releaseSchema.parse(body)
-  return { id: release.id, htmlUrl: release.html_url, uploadUrl: release.upload_url }
+  return { id: release.id, htmlUrl: release.html_url, uploadUrl: release.upload_url, body: release.body ?? null }
+}
+
+/**
+ * Render the deterministic notes one mirrored Release carries.
+ * @param version Published version shown in the Release title.
+ * @param facts Target, source commit, approval digest and update feed of the approved publication.
+ * @returns Markdown whose only variable input is the validated publication identity.
+ * Every fact is validated first, so a value cannot inject markup or change with the runner that wrote it.
+ */
+export function desktopReleaseBody(version: string, facts: DesktopReleaseNotes): string {
+  const notes = releaseNotesSchema.parse(facts)
+  const publishedVersion = versionSchema.parse(version)
+  const feed = new URL(notes.feedUrl)
+  if (feed.protocol !== 'https:' || /[\s<>`|]/u.test(notes.feedUrl)) {
+    throw new Error('desktop mirror: release notes require an https update feed URL without markup characters')
+  }
+  return [
+    `DeepSeek Harness Desktop ${publishedVersion}`,
+    '',
+    '| Item | Value |',
+    '| --- | --- |',
+    `| Version | \`${publishedVersion}\` |`,
+    `| Target | \`${notes.target}\` |`,
+    `| Source SHA | \`${notes.sourceSha}\` |`,
+    `| Approved artifact SHA-256 | \`${notes.approvalDigest}\` |`,
+    `| Update feed | <${notes.feedUrl}> |`,
+    '',
+    'The attached assets are the bytes this publication uploaded to COS. The update feed above remains the only source automatic updates read.',
+    '',
+  ].join('\n')
 }
 
 /**
@@ -117,17 +173,18 @@ async function digest(asset: DesktopReleaseAsset): Promise<{ size: number; sha25
  * @param repository Owner/name of the release repository.
  * @param tag Release tag, which the publication already created against the packaged commit.
  * @param version Published version, used only for the Release title.
+ * @param body Deterministic notes describing the approved publication.
  * @param token Installation token limited to release contents.
  * @param request HTTP implementation.
  * @returns The new Release identity.
  */
 async function createRelease(
-  repository: string, tag: string, version: string, token: string, request: typeof fetch,
+  repository: string, tag: string, version: string, body: string, token: string, request: typeof fetch,
 ): Promise<ReleaseTarget> {
   const response = await request(api(repository, 'releases'), {
     method: 'POST',
     headers: { ...headers(token), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tag_name: tag, name: `DeepSeek Harness Desktop ${version}`, draft: false, prerelease: false }),
+    body: JSON.stringify({ tag_name: tag, name: `DeepSeek Harness Desktop ${version}`, body, draft: false, prerelease: false }),
     redirect: 'error',
     signal: AbortSignal.timeout(30_000),
   })
@@ -139,6 +196,35 @@ async function createRelease(
     if (existing.present) return existing.target
   }
   throw new Error(`desktop mirror: cannot create the Release for ${tag} (HTTP ${response.status})`)
+}
+
+/**
+ * Store the deterministic notes on a Release that was created with other or missing notes.
+ * @param repository Owner/name of the release repository.
+ * @param target Release the mirror is about to fill.
+ * @param body Notes rendered from the approved publication.
+ * @param token Installation token limited to release contents.
+ * @param request HTTP implementation.
+ * @returns Nothing; unchanged notes cost no request, and a rejected or discarded update fails the mirror.
+ * Updating is how a repeated mirror converges on one Release body instead of leaving the first attempt's text.
+ */
+async function ensureReleaseBody(
+  repository: string, target: ReleaseTarget, body: string, token: string, request: typeof fetch,
+): Promise<void> {
+  if (target.body === body) return
+  const response = await request(api(repository, `releases/${target.id}`), {
+    method: 'PATCH',
+    headers: { ...headers(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body }),
+    redirect: 'error',
+    signal: AbortSignal.timeout(30_000),
+  })
+  if (!response.ok) {
+    await discard(response)
+    throw new Error(`desktop mirror: cannot update the notes of the Release for ${target.htmlUrl} (HTTP ${response.status})`)
+  }
+  const updated = releaseTarget(await response.json())
+  if (updated.body !== body) throw new Error(`desktop mirror: GitHub discarded the notes of the Release for ${target.htmlUrl}`)
 }
 
 /**
@@ -210,13 +296,14 @@ async function confirmPublishedAsset(
  * The operation is idempotent: an asset already present with the approved name, size and SHA-256 is left untouched,
  * and only missing assets are uploaded. A Release holding other bytes under an approved name stops the mirror
  * before any upload instead of overwriting published download bytes.
- * @param options Release repository, published version, approved assets and the token scoped to release contents.
+ * @param options Release repository, published version, release notes, approved assets and the token scoped to release contents.
  * @returns Terminal `complete` state, the Release URL and which assets this invocation uploaded or confirmed.
  * A conflicting Release, a changed asset and any transport failure reject without touching COS or the feeds.
  */
 export async function mirrorDesktopRelease(options: {
   readonly repository: string
   readonly version: string
+  readonly notes: DesktopReleaseNotes
   readonly assets: readonly DesktopReleaseAsset[]
   readonly token: string
   readonly request?: typeof fetch
@@ -226,6 +313,7 @@ export async function mirrorDesktopRelease(options: {
   if (assets.length === 0) throw new Error('desktop mirror: the approved package carries no release files')
   if (token.trim() === '') throw new Error('desktop mirror: GitHub App installation token is required')
   const tag = desktopReleaseTag(version)
+  const body = desktopReleaseBody(version, options.notes)
   const request = options.request ?? fetch
   const names = new Set<string>()
   for (const asset of assets) {
@@ -236,7 +324,8 @@ export async function mirrorDesktopRelease(options: {
   const release = await findRelease(repository, tag, token, request)
   const target = release.present
     ? release.target
-    : await createRelease(repository, tag, version, token, request)
+    : await createRelease(repository, tag, version, body, token, request)
+  await ensureReleaseBody(repository, target, body, token, request)
   const listing = await request(api(repository, `releases/${target.id}/assets`),
     { headers: headers(token), redirect: 'error', signal: AbortSignal.timeout(30_000) })
   if (!listing.ok) {
