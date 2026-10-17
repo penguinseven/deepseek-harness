@@ -168,6 +168,7 @@ jobs:
   mirror:
     name: Mirror desktop-v${{ needs.prepare.outputs.version }}
     needs: [route, prepare, publish]
+    # A failed mirror is retried with Re-run failed jobs: Actions reuses the successful route, prepare and publish results and outputs.
     if: always() && needs.route.result == 'success' && needs.prepare.result == 'success' && needs.publish.result == 'success'
     runs-on: ubuntu-latest
     environment: ${{ needs.prepare.outputs.preset == 'production' && 'desktop-production' || 'desktop-test' }}

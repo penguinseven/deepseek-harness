@@ -62,11 +62,11 @@ Environment 审批限制此工作流，不限制产出其产物包的打包机�
 
 ## GitHub Release 镜像
 
-`mirror` job 在 `route`、`prepare`、`publish` 全部成功后才运行（`--publish` 在 COS、feed 与 tag 完成后即以 0 退出，镜像失败不可能藏在发布失败后面），且只针对 tag 已创建的 production。它下载同一个打包产物包，并在读取 GitHub App 私钥之前重新用审批摘要校验产物包，因此未签名、未公证或已被改动的字节无法进入镜像。该 job 的所有步骤都不带 `DSH_COS_CREDENTIALS_JSON`；只有校验步骤读取保存 `DSH_PUBLISH_CONFIG_JSON` 的仓库变量，结构上无法重传 COS 或改写 feed；`publish-desktop-ci.ts --mirror` 只校验产物包并上传 `release/`。
+`mirror` job 在 `route`、`prepare`、`publish` 全部成功后才运行；当 Actions 只重跑失败的 `mirror` job 时，它会复用这些成功 job 的结果与输出。它只针对 tag 已创建的 production。`--publish` 在 COS、feed 与 tag 完成后即以 0 退出，镜像失败不可能藏在发布失败后面。每次镜像都在全新的托管 runner 上运行，不读取 publish job 的临时 `upload-records/` journal；准入依据是成功的发布结果、审批摘要与重新校验。它下载同一个打包产物包，并在读取 GitHub App 私钥之前重新用审批摘要校验产物包，因此未签名、未公证或已被改动的字节无法进入镜像。该 job 的所有步骤都不带 `DSH_COS_CREDENTIALS_JSON`；只有校验步骤读取保存 `DSH_PUBLISH_CONFIG_JSON` 的仓库变量，结构上无法重传 COS 或改写 feed；`publish-desktop-ci.ts --mirror` 只校验产物包并上传 `release/`。
 
 镜像幂等且逐字节一致。每个资产在上传前按 manifest 重新计算哈希；已存在的文件只有在大小与 SHA-256 都与 manifest 一致时才直接确认。GitHub 在资产列表给出 `digest` 时以它为准，没有该字段的旧资产则下载后计算哈希。大小或哈希不一致都会在任何上传前停止镜像，而不是覆盖已发布的下载字节；上传后的回读同样要求存储字节匹配该摘要。同一版本重复执行只会补齐缺失项。
 
-镜像失败不会让发布失败，也不会回滚：COS、feed 与 tag 已经成功，回滚反而会破坏已经升级的客户端。镜像记录结算为 `release-mirror-pending`，保留失败阶段与安全错误分类；该次运行的 step summary 标注待重试状态与重试入口。只重跑失败的 `mirror` job 是唯一的重试方式——它把自己的记录归档到 `desktop-mirror-<run_id>-<run_attempt>`，结算为 `complete`，全程不重新打包、不重新生成产物包、不重新上传 COS，并按[恢复与记录](#recovery-and-records)所述结算该次尝试更早的镜像记录。审批面板中的 `desktop-v<version>` 只声明本次审批授权的目标 Release；真实结果只出现在运行期 step summary 与 journal。
+镜像失败不会让发布失败，也不会回滚：COS、feed 与 tag 已经成功，回滚反而会破坏已经升级的客户端。镜像记录结算为 `release-mirror-pending`，保留失败阶段与安全错误分类；该次运行的 step summary 标注待重试状态与重试入口。只重跑失败的 `mirror` job 是唯一的重试方式——它把自己的记录归档到 `desktop-mirror-<run_id>-<run_attempt>`，结算为 `complete`，全程不重新打包、不重新生成产物包、不重新上传 COS，并按[恢复与记录](#recovery-and-records)所述结算该次尝试更早的镜像记录。重试在全新的 runner 上运行，因此不能也不依赖失败尝试的临时 journal；它会重建自己的记录，并重新按审批摘要校验产物包。审批面板中的 `desktop-v<version>` 只声明本次审批授权的目标 Release；真实结果只出现在运行期 step summary 与 journal。
 
 <a id="restore-a-channel"></a>
 

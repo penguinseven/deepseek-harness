@@ -242,11 +242,9 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === import.meta.fi
       if (!mirrorToken) throw new Error('desktop publish: GitHub App token is required to mirror a release')
       const recordsRoot = join(stateRoot, 'upload-records')
       const destination = `${plan.bucket}/${plan.publicUrl}${manifest.build.channel}`
-      if (!await wasDesktopAttemptPublished(recordsRoot,
-        { repository: manifest.repository, runId: selection.runId, attempt: selection.attempt, destination })) {
-        // A mirror of bytes the feeds never published would put unapproved downloads next to the real ones.
-        throw new Error('desktop publish: the running attempt has no completed COS and feed publication to mirror')
-      }
+      // Actions re-runs only the failed mirror job after publish succeeded; the workflow gate still sees that
+      // success and its outputs. Publication journals live in a runner's temporary directory, so this fresh
+      // runner cannot require that journal; the workflow gate and the approval digest prove the published attempt.
       const record = await createDesktopPublicationRecord<DesktopMirrorStatus>(recordsRoot, {
         repository: manifest.repository, runId: selection.runId, attempt: selection.attempt,
         actor: env.GITHUB_TRIGGERING_ACTOR || env.GITHUB_ACTOR || 'unknown',

@@ -177,9 +177,10 @@ it('leaves the publication complete so only the mirror job can retry the Release
   expect(publishBranch).not.toContain('mirrorDesktopRelease')
   expect(publishBranch).not.toContain("type: 'mirror-pending'")
   expect(publishBranch).toContain("await journal.record({ type: 'complete' })")
-  // The mirror branch re-proves the attempt published before it creates a Release.
+  // The mirror branch runs on a fresh runner, so it cannot read the publish job's temporary journal.
+  // The workflow gate plus the approval digest admit it; the branch records its own outcome.
   const mirrorBranch = script.slice(script.indexOf("mode === '--mirror'"), script.indexOf("phase = 'upload credential loading'"))
-  expect(mirrorBranch).toContain('wasDesktopAttemptPublished')
+  expect(mirrorBranch).not.toContain('wasDesktopAttemptPublished')
   expect(mirrorBranch).toContain('settleDesktopMirrorRecords')
 })
 
