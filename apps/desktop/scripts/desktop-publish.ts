@@ -20,6 +20,7 @@ export interface DesktopPublishTransport {
 /** Credential-free, durably flushed publication event. */
 export interface DesktopPublishEvent {
   readonly type: 'object-present' | 'put-intent' | 'put-verified' | 'feeds-complete' | 'tag-pending' | 'complete' | 'failed'
+    | 'mirror-pending' | 'mirror-complete'
   readonly failure?: { readonly phase: string; readonly code: string; readonly message: string }
   readonly key?: string
   readonly before?: string | null

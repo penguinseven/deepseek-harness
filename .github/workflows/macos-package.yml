@@ -50,8 +50,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      qualification: ${{ steps.qualify.outputs.qualification }}
+      runs-on: ${{ steps.qualify.outputs.runs-on }}
+    steps:
+      - name: Resolve qualification and runner labels
+        id: qualify
+        env:
+          PACKAGE_SKIP_NOTARIZATION: ${{ inputs.skip_notarization }}
+          SIGNED_RUNNER: ${{ vars.DESKTOP_MAC_SIGNED_RUNNER }}
+        run: >-
+          node -e "const { appendFileSync } = require('node:fs');
+          const skip = process.env.PACKAGE_SKIP_NOTARIZATION;
+          if (skip !== 'true' && skip !== 'false') throw new Error('Unknown notarization selection');
+          const labels = (value) => value.split(',').map((label) => label.trim()).filter(Boolean);
+          let runner;
+          let qualification;
+          if (skip === 'true') { runner = ['macos-14']; qualification = 'unnotarized' } else {
+          runner = labels(process.env.SIGNED_RUNNER || '');
+          qualification = 'notarized';
+          if (runner.length === 0) throw new Error('DESKTOP_MAC_SIGNED_RUNNER is not set; notarized macOS packaging needs the self-hosted signing machine');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, 'qualification=' + qualification + '\nruns-on=' + JSON.stringify(runner) + '\n');"
+
   package:
-    runs-on: [self-hosted, macOS, ARM64, dsh-mac-package-trial]
+    needs: qualify
+    runs-on: ${{ fromJSON(needs.qualify.outputs.runs-on) }}
     timeout-minutes: 180
     defaults:
       run:

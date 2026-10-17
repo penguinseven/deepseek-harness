@@ -52,6 +52,7 @@ jobs:
       route: ${{ steps.check.outputs.route }}
       preset: ${{ steps.check.outputs.preset }}
       approval: ${{ steps.check.outputs.approval }}
+      version: ${{ steps.check.outputs.version }}
       label: ${{ steps.check.outputs.label }}
     env:
       DSH_TELEMETRY_DISABLED: '1'
@@ -155,5 +156,81 @@ jobs:
         with:
           name: desktop-publication-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.publish.outputs.record }}/
+          if-no-files-found: error
+          retention-days: 30
+
+  # Mirrors the bytes COS already serves; it never repackages, re-signs or re-uploads, so its own failure
+  # leaves the published release intact and is retried through the same command.
+  mirror:
+    name: Mirror desktop-v${{ needs.prepare.outputs.version }}
+    needs: [route, prepare, publish]
+    if: always() && needs.route.result == 'success' && needs.prepare.result == 'success' && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.prepare.outputs.preset == 'production' && 'desktop-production' || 'desktop-test' }}
+    concurrency:
+      group: desktop-mirror-${{ needs.prepare.outputs.preset }}
+      cancel-in-progress: false
+    timeout-minutes: 30
+    env:
+      DESKTOP_APPROVED_PACKAGE: ${{ needs.prepare.outputs.approval }}
+      DESKTOP_PUBLISH_ROUTE: ${{ needs.prepare.outputs.route }}
+      DESKTOP_ARTIFACT_BUNDLE_DIR: ${{ github.workspace }}/desktop-publisher/artifact-bundle
+      DSH_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          path: desktop-publisher
+      - name: Download the selected package bundle
+        uses: actions/download-artifact@v7.0.1
+        with:
+          name: ${{ needs.route.outputs.artifact-name }}
+          run-id: ${{ inputs.package_run_id }}
+          github-token: ${{ github.token }}
+          path: desktop-publisher/artifact-bundle
+      - uses: pnpm/action-setup@v5.0.0
+        with:
+          package_json_file: desktop-publisher/package.json
+          dest: ${{ runner.temp }}/publish-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24'
+      - run: pnpm install --frozen-lockfile
+        working-directory: desktop-publisher
+      - name: Verify the downloaded package without upload credentials
+        id: check
+        working-directory: desktop-publisher
+        run: node --import tsx apps/desktop/scripts/publish-desktop-ci.ts --check
+      - name: Read machine GitHub App key
+        if: needs.prepare.outputs.preset == 'production'
+        id: key
+        env:
+          DSH_GITHUB_APP_PRIVATE_KEY: ${{ secrets.DSH_GITHUB_APP_PRIVATE_KEY }}
+        working-directory: desktop-publisher
+        run: node apps/desktop/scripts/read-desktop-app-key.mjs
+      - name: Create short-lived release token
+        if: needs.prepare.outputs.preset == 'production'
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ steps.check.outputs.app-client-id }}
+          private-key: ${{ steps.key.outputs.private-key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - name: Mirror the approved bytes into a GitHub Release
+        id: mirror
+        if: needs.prepare.outputs.preset == 'production'
+        working-directory: desktop-publisher
+        env:
+          DESKTOP_TAG_TOKEN: ${{ steps.app.outputs.token }}
+          DSH_DESKTOP_PUBLISH_STATE_DIR: ${{ runner.temp }}
+        run: node --import tsx apps/desktop/scripts/publish-desktop-ci.ts --mirror
+      - name: Retain mirror audit
+        if: always() && steps.mirror.outputs.record != ''
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: desktop-mirror-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.mirror.outputs.record }}/
           if-no-files-found: error
           retention-days: 30

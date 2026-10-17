@@ -16,7 +16,7 @@ description: "在本地或 Windows／macOS Actions 中生成 Desktop 安装包�
 - [发布版本](#release-versions)
 - [配置与本地构建](#configuration-and-local-builds)
 - [Windows Actions 打包](#windows-actions)
-- [macOS 自托管打包](#macos-actions)
+- [macOS Actions 打包](#macos-actions)
 - [未签名 Windows 测试安装包](#unsigned-windows-test-installer)
 - [无发布签名的本地 macOS DMG](#local-macos-dmg-without-release-signing)
 - [macOS 发布签名与诊断](#macos-release-signing)
@@ -30,7 +30,7 @@ description: "在本地或 Windows／macOS Actions 中生成 Desktop 安装包�
 
 ## 选择打包方式
 
-安装锁定依赖后，从仓库根目录运行本地命令。本地构建使用平台命令，已注册的自托管 runner 使用对应平台的 Actions。test/production 部署与 signed/unsigned 模式分别选择。任何 Windows 签名构建或共享 runner 使用前，先阅读 [Windows 签名与 runner 运维](../windows-signing/README.zh.md#trust-and-isolation)。安装与打包分开进行；[发布](../publishing/README.zh.md)还需要单独的显式操作。
+安装锁定依赖后，从仓库根目录运行本地命令。本地构建使用平台命令，对应平台的 Actions 则在托管 runner 上构建 unsigned 与未公证目标，签名仍留在自托管机器。test/production 部署与 signed/unsigned 模式分别选择。任何 Windows 签名构建或共享 runner 使用前，先阅读 [Windows 签名与 runner 运维](../windows-signing/README.zh.md#trust-and-isolation)。安装与打包分开进行；[发布](../publishing/README.zh.md)还需要单独的显式操作。
 
 <a id="release-versions"></a>
 
@@ -103,7 +103,7 @@ macOS 正式发布和本地未签名 DMG 都通过 [electron-builder 配置](../
 
 ## Windows Actions 打包
 
-`Package Desktop · Windows` [手动工作流](../../../.github/workflows/windows-package.yml) 选择专用 Windows x64 runner 标签 `dsh-win-package-trial`，并使用机器 preset `test` 或 `production`。选择 `unsigned`（默认）或 `signed`；签名模式复用现有 EV token 预检、签名缓存与失败 interlock，不发布或上传 release。`build_version` 默认为 `auto`，使用[发布版本](#release-versions)中的 CI 标识；显式值可以是源码产品版本，或扩展构建版本，例如产品 `0.2.1-alpha.1` 对应 `0.2.1-alpha.1.20261009.1`。版本前缀必须匹配所选源码；校验错误显示其当前示例。manifest 保持不变。
+`Package Desktop · Windows` [手动工作流](../../../.github/workflows/windows-package.yml) 先在 `ubuntu-latest` 上运行 `qualify` 作业，在任何构建机被分配前决定 runner，再选择机器 preset `test` 或 `production`。选择 `unsigned`（默认）或 `signed`；签名模式复用现有 EV token 预检、签名缓存与失败 interlock，不发布或上传 release。unsigned 在托管的 `windows-latest` 镜像上构建。signed 需要仓库变量 `DESKTOP_WIN_SIGNED_RUNNER`，其值为签名机标签的逗号分隔列表；工作流中不出现任何机器名，变量为空时在分配 runner 之前直接失败，而不会回退到不持有 EV token 的托管镜像。`build_version` 默认为 `auto`，使用[发布版本](#release-versions)中的 CI 标识；显式值可以是源码产品版本，或扩展构建版本，例如产品 `0.2.1-alpha.1` 对应 `0.2.1-alpha.1.20261009.1`。版本前缀必须匹配所选源码；校验错误显示其当前示例。manifest 保持不变。
 
 在 Actions 选择工作流、源码分支、preset、签名模式和版本，再点击 Run workflow。输入变更合并前，用 `gh workflow run windows-package.yml --ref <branch> -f preset=test -f signing=unsigned -f build_version=auto` 测试已推送分支；合并后验证网页表单。它不监听 push 或 PR。日志和成功生成的 EXE 保留 14 天。依赖打包流程前检查日志和安装包；安装是独立操作。检出前，Node 删除 runner 专用源码目录，不跟随依赖 junction；工作流校验目标位置并拒绝链接祖先目录。不得指向日常开发目录。运行共享一个并发组，不取消正在进行的构建；最多保留一个待运行任务，新触发会替换它。仅在成功完成干净检出后上传诊断。机器配置位于 checkout 之外，不作为产物上传。
 
@@ -111,9 +111,9 @@ macOS 正式发布和本地未签名 DMG 都通过 [electron-builder 配置](../
 
 <a id="macos-actions"></a>
 
-## macOS 自托管打包
+## macOS Actions 打包
 
-`Package Desktop · macOS` [手动工作流](../../../.github/workflows/macos-package.yml) 使用带有 `dsh-mac-package-trial` 标签的 Apple Silicon runner。它选择 `test` 或 `production`，以 UTC 日期、运行编号和重试次数解析 `build_version=auto`，并复用现有签名、公证和打包运行时检查。成功的 DMG／ZIP 与诊断日志保留 14 天；工作流不发布 release。操作人员须注册 runner，并验收完整 Actions 运行后再依赖该流程。
+`Package Desktop · macOS` [手动工作流](../../../.github/workflows/macos-package.yml) 运行同一个 `qualify` 作业，仅在选择公证时指向 Apple Silicon 签名机。`skip_notarization=true` 在托管的 `macos-14` 镜像上构建；需要公证的构建读取仓库变量 `DESKTOP_MAC_SIGNED_RUNNER`，变量为空时在分配 runner 之前失败。它选择 `test` 或 `production`，以 UTC 日期、运行编号和重试次数解析 `build_version=auto`，并复用现有签名、公证和打包运行时检查。成功的 DMG／ZIP 与诊断日志保留 14 天；工作流不发布 release。操作人员须注册 runner，并验收完整 Actions 运行后再依赖该流程。
 
 运行 `node apps/desktop/scripts/setup-macos-packaging.mjs "$HOME/dsh-ci"` 创建私有 `runner/`、`packaging/{presets,secrets,certificates}` 和 `cache/macos-signatures` 目录，不覆盖已有文件；追加 `--check` 仅检查。在 checkout 外填写 [preset](../config/macos-packaging/test.env.example) 和[签名](../config/macos-packaging/macos-signing.env.example)模板，将秘密和证书文件权限设为 `0600`。`DSH_PACKAGING_CONFIG_DIR` 指定 `packaging` 的绝对目录，`DSH_PACKAGING_PRESET` 选择其中的 preset；缺少文件立即失败，不回退到 `.env.macos`。Mac 签名和仅准备构建读取 `secrets/macos-signing.env`，相对凭据路径以该文件所在目录为基准。公开 preset 拒绝签名凭据，签名文件不能覆盖公开配置。本地未签名 Mac 构建保留无需配置的行为。
 

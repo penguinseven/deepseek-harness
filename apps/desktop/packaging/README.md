@@ -16,7 +16,7 @@ Build Desktop installers locally or through Windows or macOS Actions, choose dep
 - [Release versions](#release-versions)
 - [Configuration and local builds](#configuration-and-local-builds)
 - [Windows Actions packaging](#windows-actions)
-- [macOS self-hosted packaging](#macos-actions)
+- [macOS Actions packaging](#macos-actions)
 - [Unsigned Windows test installer](#unsigned-windows-test-installer)
 - [Local macOS DMG without release signing](#local-macos-dmg-without-release-signing)
 - [macOS release signing and diagnostics](#macos-release-signing)
@@ -30,7 +30,7 @@ Build Desktop installers locally or through Windows or macOS Actions, choose dep
 
 ## Choose a build path
 
-Run local commands from the repository root after installing locked dependencies. Use platform-specific commands for a local build, or platform Actions for the registered self-hosted runner. Choose test or production deployment independently from signed or unsigned mode. Read [Windows signing and runner operations](../windows-signing/README.md#trust-and-isolation) before any Windows signed build or shared-runner use. Installation is separate from packaging; [publication](../publishing/README.md) is a further explicit operation.
+Run local commands from the repository root after installing locked dependencies. Use platform-specific commands for a local build, or platform Actions, which builds unsigned and unnotarized targets on hosted runners and keeps signing on the self-hosted machines. Choose test or production deployment independently from signed or unsigned mode. Read [Windows signing and runner operations](../windows-signing/README.md#trust-and-isolation) before any Windows signed build or shared-runner use. Installation is separate from packaging; [publication](../publishing/README.md) is a further explicit operation.
 
 <a id="release-versions"></a>
 
@@ -103,7 +103,7 @@ Each target owns its packed package inputs, prepared runtime, package set, dsh t
 
 ## Windows Actions packaging
 
-The `Package Desktop · Windows` [manual workflow](../../../.github/workflows/windows-package.yml) selects the dedicated Windows x64 runner label `dsh-win-package-trial` and the machine preset `test` or `production`. Choose `unsigned` (default) or `signed`; signed mode uses the existing EV token preflight, signature cache and failure interlock. It does not publish or upload a release. `build_version` defaults to `auto`, using the CI identifier in [Release versions](#release-versions); an explicit value may be the checkout's product version or an extended build version such as `0.2.1-alpha.1.20261009.1` for product `0.2.1-alpha.1`. The version prefix must match the selected checkout; validation errors show its current example. Manifests remain unchanged.
+The `Package Desktop · Windows` [manual workflow](../../../.github/workflows/windows-package.yml) runs a `qualify` job on `ubuntu-latest` that resolves the runner before any build machine is allocated, then selects the machine preset `test` or `production`. Choose `unsigned` (default) or `signed`; signed mode uses the existing EV token preflight, signature cache and failure interlock. Unsigned builds run on the hosted `windows-latest` image. Signed builds need the repository variable `DESKTOP_WIN_SIGNED_RUNNER` holding the signing machine's comma-separated labels; the workflow names no machine, and an empty variable fails the run before a runner is assigned rather than falling back to a hosted image that holds no EV token. It does not publish or upload a release. `build_version` defaults to `auto`, using the CI identifier in [Release versions](#release-versions); an explicit value may be the checkout's product version or an extended build version such as `0.2.1-alpha.1.20261009.1` for product `0.2.1-alpha.1`. The version prefix must match the selected checkout; validation errors show its current example. Manifests remain unchanged.
 
 Select the workflow in Actions, choose the source branch, preset, signing mode and version, then click Run workflow. Before merging input changes, test the pushed branch with `gh workflow run windows-package.yml --ref <branch> -f preset=test -f signing=unsigned -f build_version=auto`; verify the web form after merging. There is no push or PR trigger. Logs and successful EXEs are retained for 14 days. Inspect the retained logs and installer before relying on packaging; installation is separate. Before checkout, Node removes the runner-owned source directory without following dependency junctions; the workflow validates its location and rejects linked ancestors. Never point it at a development checkout. Runs share one concurrency group without cancelling an active build; only one run remains pending, and a newer dispatch replaces it. Diagnostics upload requires a successful clean checkout. Machine settings stay outside the checkout and are never uploaded as artifacts.
 
@@ -111,9 +111,9 @@ Open the completed run in Actions and download its Artifacts. `windows-x64-signe
 
 <a id="macos-actions"></a>
 
-## macOS self-hosted packaging
+## macOS Actions packaging
 
-The `Package Desktop · macOS` [manual workflow](../../../.github/workflows/macos-package.yml) targets an Apple Silicon runner labeled `dsh-mac-package-trial`. It selects `test` or `production`, resolves `build_version=auto` from the UTC date, run number and attempt, and uses the existing signing, notarization and packaged-runtime checks. Successful DMG/ZIP files and diagnostic logs are retained for 14 days; this workflow does not publish a release. The operator must register the runner and verify a complete Actions run before relying on it.
+The `Package Desktop · macOS` [manual workflow](../../../.github/workflows/macos-package.yml) runs the same `qualify` job, then targets the Apple Silicon signing runner only when notarization is requested. `skip_notarization=true` builds on the hosted `macos-14` image; a notarized build reads the repository variable `DESKTOP_MAC_SIGNED_RUNNER` and fails before runner assignment when it is empty. It selects `test` or `production`, resolves `build_version=auto` from the UTC date, run number and attempt, and uses the existing signing, notarization and packaged-runtime checks. Successful DMG/ZIP files and diagnostic logs are retained for 14 days; this workflow does not publish a release. The operator must register the runner and verify a complete Actions run before relying on it.
 
 Run `node apps/desktop/scripts/setup-macos-packaging.mjs "$HOME/dsh-ci"` to prepare private `runner/`, `packaging/{presets,secrets,certificates}` and `cache/macos-signatures` directories without overwriting existing files; append `--check` to inspect them. Fill the [preset](../config/macos-packaging/test.env.example) and [signing](../config/macos-packaging/macos-signing.env.example) templates outside the checkout. Set secret and certificate files to mode `0600`. `DSH_PACKAGING_CONFIG_DIR` selects the absolute `packaging` directory and `DSH_PACKAGING_PRESET` selects its preset; missing files fail without falling back to `.env.macos`. Signed and preparation-only Mac builds read `secrets/macos-signing.env`; relative credential paths resolve beside that file. Public presets reject signing credentials, and signing files cannot override public settings. Local unsigned Mac builds retain their configuration-free behavior.
 

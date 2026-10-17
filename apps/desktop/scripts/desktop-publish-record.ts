@@ -25,11 +25,20 @@ export async function withDesktopChannelLock<T>(root: string, destination: strin
   } finally { await rm(path, { recursive: true }) }
 }
 
+/** Terminal states a journal can settle on; the two pending states name the only remaining recovery. */
+export type DesktopPublicationStatus = 'complete' | 'preview' | 'failed' | 'published-tag-pending' | 'release-mirror-pending'
+
+/**
+ * Events that finish every remote write the automation owns, so only mirroring remains outstanding.
+ * A journal carrying one of them can be retried without repackaging, re-uploading COS or touching the feeds.
+ */
+const COMPLETED_WRITES = new Set(['feeds-complete', 'mirror-pending', 'mirror-complete'])
+
 /** An operation journal retained independently of disposable checkout and artifact files. */
 export interface DesktopPublicationRecord {
   readonly directory: string
   record(event: DesktopPublishEvent): Promise<void>
-  finish(status: 'complete' | 'preview' | 'failed' | 'published-tag-pending'): Promise<void>
+  finish(status: DesktopPublicationStatus): Promise<void>
 }
 
 /**
@@ -40,7 +49,7 @@ export interface DesktopPublicationRecord {
  */
 export async function createDesktopPublicationRecord(
   root: string,
-  identity: { repository: string; runId: string; attempt: string; actor: string; destination: string; operation: 'publish' | 'rollback'; reason: string },
+  identity: { repository: string; runId: string; attempt: string; actor: string; destination: string; operation: 'publish' | 'rollback' | 'mirror'; reason: string },
 ): Promise<DesktopPublicationRecord> {
   await mkdir(root, { recursive: true, mode: 0o700 })
   const staging = await mkdtemp(join(root, '.initializing-'))
@@ -103,7 +112,7 @@ export async function wasDesktopAttemptPublished(root: string, expected: {
     }
     // Only newline-terminated entries were completely appended before an interruption.
     for (const line of events.split('\n').slice(0, -1)) {
-      if (z.object({ type: z.string() }).parse(JSON.parse(line)).type === 'feeds-complete') return true
+      if (COMPLETED_WRITES.has(z.object({ type: z.string() }).parse(JSON.parse(line)).type)) return true
     }
   }
   return false

@@ -8,13 +8,14 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Publish a completed package from the Artifact bundle its packaging run uploaded; neither publication job reads the packaging machine. Both test and production publish binaries followed by update YAML. Both deployments require GitHub Environment approval; only production creates a GitHub App tag. Real COS, CDN and administrator-permission acceptance remain deployment checks; local fixtures do not establish those permissions. COS and the update feed remain the only automatic-update source; GitHub Release stays a mirror, planned for a later stage and not enabled yet.
+Publish a completed package from the Artifact bundle its packaging run uploaded; neither publication job reads the packaging machine. Both test and production publish binaries followed by update YAML. Both deployments require GitHub Environment approval; only production creates a GitHub App tag. Real COS, CDN and administrator-permission acceptance remain deployment checks; local fixtures do not establish those permissions. COS and the update feed remain the only automatic-update source; the GitHub Release is a mirror of the same approved bytes and never changes what clients install.
 
 ## Table of Contents
 
 - [Machine setup](#machine-setup)
 - [Package and publish](#package-and-publish)
 - [Recovery and records](#recovery-and-records)
+- [GitHub Release mirror](#release-mirror)
 - [Restore a channel](#restore-a-channel)
 
 <a id="machine-setup"></a>
@@ -54,6 +55,16 @@ The `upload-records/` directory under the publication state root keeps an operat
 If the feed completed but tagging failed, the result is `published-tag-pending` and the job fails visibly. On retry, durable feed-completion evidence permits only tag recovery, even if a later release has advanced the channel. It never re-publishes old YAML. An existing conflicting tag requires administrator investigation and is never moved automatically.
 
 Publication takes a per-destination channel lock under the state root's `publish-locks/`, and the workflow's `desktop-publish-<preset>` concurrency group serializes one channel. A crash can leave a lock directory behind; verify no writer is running before removing it manually.
+
+<a id="release-mirror"></a>
+
+## GitHub Release mirror
+
+A `mirror` job runs after `route`, `prepare` and `publish` all succeed, and only for a production preset whose tag was created. It downloads the same package Artifact and re-proves the bundle against the approved digest before reading the GitHub App key, so the mirror cannot start from unsigned, unnotarized or altered bytes. Its steps carry no `DSH_COS_CREDENTIALS_JSON` or `DSH_PUBLISH_CONFIG_JSON`, so it cannot re-upload COS or rewrite a feed; `publish-desktop-ci.ts --mirror` verifies the bundle and then uploads `release/` only.
+
+Mirroring is idempotent. Each asset is rehashed against the manifest before upload; an asset already present at the approved size is confirmed rather than replaced, and an existing asset of a different size stops the mirror instead of overwriting published download bytes. Repeating the mirror for one version therefore only adds what is missing.
+
+A mirror failure does not fail or roll back the publication: COS, the feed and the tag already succeeded, and a rollback would break clients that already updated. The journal settles as `release-mirror-pending` and keeps the failure stage and safe error classification; the run's step summary names the pending state and the retry. Re-running the `mirror` job is the only retry entry — it reports its own record under `desktop-mirror-<run_id>-<run_attempt>` and settles at `complete` without repackaging, regenerating a bundle or re-uploading COS. `desktop-v<version>` in the approval panel names the Release the approval authorizes; the outcome appears only in the run's step summary and journal.
 
 <a id="restore-a-channel"></a>
 

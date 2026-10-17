@@ -8,13 +8,14 @@ description: "在托管 runner 上从不可变的打包产物包发布 Desktop �
 
 ## 概述
 
-从打包运行上传的产物包发布完整安装包；两个发布 job 都不读取打包机器。test 和 production 都先发布二进制文件，再更新 YAML。两种环境都需要 GitHub Environment 审批；只有 production 通过 GitHub App 创建 tag。真实 COS、CDN 和管理员权限仍需部署验收；本地 fixture 不证明这些权限可用。COS 与更新 feed 仍是唯一的自动更新来源；GitHub Release 仅作为镜像，属于后续阶段，尚未启用。
+从打包运行上传的产物包发布完整安装包；两个发布 job 都不读取打包机器。test 和 production 都先发布二进制文件，再更新 YAML。两种环境都需要 GitHub Environment 审批；只有 production 通过 GitHub App 创建 tag。真实 COS、CDN 和管理员权限仍需部署验收；本地 fixture 不证明这些权限可用。COS 与更新 feed 仍是唯一的自动更新来源；GitHub Release 只是同一批已审批字节的镜像，不改变客户端实际安装的内容。
 
 ## 目录
 
 - [机器配置](#machine-setup)
 - [打包与发布](#package-and-publish)
 - [恢复与记录](#recovery-and-records)
+- [GitHub Release 镜像](#release-mirror)
 - [恢复频道](#restore-a-channel)
 
 <a id="machine-setup"></a>
@@ -54,6 +55,16 @@ Environment 审批限制此工作流，不限制产出其产物包的打包机�
 频道更新完成但 tag 失败时，结果为 `published-tag-pending`，job 明确失败。重试时，已落盘的频道完成证据只允许恢复 tag，即使后来发布已推进频道，也不会重新发布旧 YAML。已有冲突 tag 需要管理员调查，不会自动移动。
 
 发布会在状态根的 `publish-locks/` 下获取目标频道锁，工作流的 `desktop-publish-<preset>` concurrency 组串行化同一频道。崩溃可能留下锁目录；手动删除前确认没有写入任务运行。
+
+<a id="release-mirror"></a>
+
+## GitHub Release 镜像
+
+`mirror` job 在 `route`、`prepare`、`publish` 全部成功后才运行，且只针对 tag 已创建的 production。它下载同一个打包产物包，并在读取 GitHub App 私钥之前重新用审批摘要校验产物包，因此未签名、未公证或已被改动的字节无法进入镜像。该 job 的所有步骤都不带 `DSH_COS_CREDENTIALS_JSON` 与 `DSH_PUBLISH_CONFIG_JSON`，结构上无法重传 COS 或改写 feed；`publish-desktop-ci.ts --mirror` 只校验产物包并上传 `release/`。
+
+镜像幂等。每个资产在上传前按 manifest 重新计算哈希；已存在且大小一致的文件直接确认，不重复上传；同名但大小不同的文件会停止镜像，而不是覆盖已发布的下载字节。同一版本重复执行只会补齐缺失项。
+
+镜像失败不会让发布失败，也不会回滚：COS、feed 与 tag 已经成功，回滚反而会破坏已经升级的客户端。journal 结算为 `release-mirror-pending`，保留失败阶段与安全错误分类；该次运行的 step summary 标注待重试状态与重试入口。重跑 `mirror` job 是唯一的重试方式——它把自己的记录归档到 `desktop-mirror-<run_id>-<run_attempt>`，并结算为 `complete`，全程不重新打包、不重新生成产物包、不重新上传 COS。审批面板中的 `desktop-v<version>` 只声明本次审批授权的目标 Release；真实结果只出现在运行期 step summary 与 journal。
 
 <a id="restore-a-channel"></a>
 

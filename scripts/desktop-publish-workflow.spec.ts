@@ -10,6 +10,7 @@ const workflow = yaml.load(source) as {
   on: Record<string, unknown>
   permissions: Record<string, string>
   jobs: Record<string, {
+    name?: string
     defaults?: unknown
     needs?: string | string[]
     env?: Record<string, string>
@@ -98,6 +99,7 @@ it('downloads the selected artifact before verifying it without an Environment',
     route: '${{ steps.check.outputs.route }}',
     preset: '${{ steps.check.outputs.preset }}',
     approval: '${{ steps.check.outputs.approval }}',
+    version: '${{ steps.check.outputs.version }}',
     label: '${{ steps.check.outputs.label }}',
   })
   const check = prepare.steps.find(step => step.id === 'check')!
@@ -148,4 +150,51 @@ it('accepts master or main dispatch and rejects other refs', () => {
     expect(result.status).toBe(ref === 'refs/heads/stale-feature' ? 1 : 0)
     if (result.status !== 0) expect(result.stderr).toContain('must be dispatched from')
   }
+})
+
+it('mirrors the approved bytes after publication without any upload credential', () => {
+  const mirror = workflow.jobs.mirror!
+  expect(mirror.needs).toEqual(['route', 'prepare', 'publish'])
+  // A failed mirror must never be reported as a failed publication: it runs only when every prior job succeeded.
+  expect(mirror.if).toBe("always() && needs.route.result == 'success' && needs.prepare.result == 'success' && needs.publish.result == 'success'")
+  expect(mirror['runs-on']).toBe('ubuntu-latest')
+  expect(mirror.environment).toBe("${{ needs.prepare.outputs.preset == 'production' && 'desktop-production' || 'desktop-test' }}")
+  expect(mirror.concurrency).toEqual({ group: 'desktop-mirror-${{ needs.prepare.outputs.preset }}', 'cancel-in-progress': false })
+  expect(mirror.env).toEqual({
+    DESKTOP_APPROVED_PACKAGE: '${{ needs.prepare.outputs.approval }}',
+    DESKTOP_PUBLISH_ROUTE: '${{ needs.prepare.outputs.route }}',
+    DESKTOP_ARTIFACT_BUNDLE_DIR: '${{ github.workspace }}/desktop-publisher/artifact-bundle',
+    DSH_TELEMETRY_DISABLED: '1',
+  })
+  const fetched = mirror.steps.find(step => step.uses?.startsWith('actions/download-artifact@'))!
+  expect(fetched.with).toEqual({
+    name: '${{ needs.route.outputs.artifact-name }}',
+    'run-id': '${{ inputs.package_run_id }}',
+    'github-token': '${{ github.token }}',
+    path: 'desktop-publisher/artifact-bundle',
+  })
+  const run = mirror.steps.find(step => step.id === 'mirror')!
+  expect(run.run).toBe('node --import tsx apps/desktop/scripts/publish-desktop-ci.ts --mirror')
+  expect(run.if).toBe("needs.prepare.outputs.preset == 'production'")
+  // The mirror reads only the release token; COS credentials are absent, so it cannot re-upload or rewrite feeds.
+  expect(run.env).toEqual({
+    DESKTOP_TAG_TOKEN: '${{ steps.app.outputs.token }}',
+    DSH_DESKTOP_PUBLISH_STATE_DIR: '${{ runner.temp }}',
+  })
+  for (const step of mirror.steps) {
+    expect(Object.keys(step.env ?? {})).not.toContain('DSH_COS_CREDENTIALS_JSON')
+    expect(Object.keys(step.env ?? {})).not.toContain('DSH_PUBLISH_CONFIG_JSON')
+  }
+  expect(mirror.steps.find(step => step.id === 'app')?.with).toMatchObject({ 'permission-contents': 'write' })
+})
+
+it('keeps one publish-phase flag per job so a mirror retry never republishes', () => {
+  for (const name of ['route', 'prepare', 'publish', 'mirror']) {
+    expect(workflow.jobs[name]!['runs-on']).toBe('ubuntu-latest')
+  }
+  const publish = workflow.jobs.publish!.steps.find(step => step.id === 'publish')!
+  expect(publish.run).toBe('node --import tsx apps/desktop/scripts/publish-desktop-ci.ts --publish')
+  const mirror = workflow.jobs.mirror!.steps.find(step => step.id === 'mirror')!
+  expect(mirror.run).not.toContain('--publish')
+  expect(workflow.jobs.mirror!.steps.some(step => step.id === 'publish')).toBe(false)
 })

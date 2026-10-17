@@ -15,6 +15,7 @@
 | 打包来源 | <a href="https&#58;//github.com/owner/repo/actions/runs/10/attempts/2">查看打包运行 #10 · 第 2 次尝试</a><br>源码：<code>master @ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb</code><br>打包机器：<code>fixture-runner</code> |
 | 签名与公证 | EXE 签名校验通过 |
 | Git tag | 不创建（test 环境） |
+| GitHub Release | 不创建（test 环境） |
 
 ### 批准后将执行
 

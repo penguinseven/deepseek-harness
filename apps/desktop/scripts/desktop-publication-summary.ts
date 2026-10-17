@@ -17,6 +17,7 @@ function link(url: string, label = url): string { return `<a href="${text(url)}"
  * @param approval Digest bound to the approved manifest, evidence and upload plan.
  * File SHA-256 hex supports `shasum -a 256` on downloads; upload reconciliation separately uses SHA-512 base64.
  * @returns GitHub-flavored Markdown with final URLs and upload-byte fingerprints, without credentials or local paths.
+ * The GitHub Release row authorizes mirroring; the outcome reaches the run's step summary and journal instead.
  */
 export async function desktopPublicationSummary(
   manifest: DesktopArtifactManifest, plan: DesktopUploadPlan, approval: string,
@@ -47,11 +48,19 @@ export async function desktopPublicationSummary(
     row('升级 YAML', `${feeds.map(file => link(url(file.key))).join('<br>')}<br>本次发布将更新此文件；审批前可能不存在或仍指向旧版本。`),
     row('打包来源', `${link(runUrl, `查看打包运行 #${manifest.actions.workflowRunId} · 第 ${manifest.actions.workflowAttempt} 次尝试`)}<br>源码：${code(`${manifest.source.ref} @ ${manifest.source.sha}`)}<br>打包机器：${code(manifest.actions.runnerName)}`),
     row('签名与公证', plan.target === 'win-x64' ? 'EXE 签名校验通过' : 'DMG 校验通过<br>ZIP 内应用校验通过'),
-    row('Git tag', tag), '', '### 批准后将执行', '',
+    row('Git tag', tag),
+    // The approval panel renders before anything runs, so it names the mirror it authorizes rather than a result.
+    row('GitHub Release', plan.environment === 'production'
+      ? `${code(`desktop-v${plan.version}`)}<br>在 COS、升级 YAML 与 Git tag 全部成功后，把同一批已审批字节镜像到该 Release；镜像结果写入运行日志，不改变本次发布结论。`
+      : '不创建（test 环境）'),
+    '', '### 批准后将执行', '',
     '1. 重新校验产物与发布目标；若与审批摘要不一致则停止。',
     '2. 上传缺少的文件，跳过内容一致的已有文件；发现内容冲突则停止。',
     '3. 更新上述升级 YAML，并保存发布记录。',
-    ...(plan.environment === 'production' ? ['4. 为实际打包提交创建上述 Git tag；若 tag 创建失败，记录“已发布，待补 tag”。'] : []), '',
+    ...(plan.environment === 'production' ? [
+      '4. 为实际打包提交创建上述 Git tag；若 tag 创建失败，记录“已发布，待补 tag”。',
+      '5. 镜像上述 GitHub Release；若镜像失败，记录 `release-mirror-pending`，只重试镜像，不回滚已完成的 COS 与升级 YAML。',
+    ] : []), '',
     ...(plan.environment === 'test' ? ['**本次只发布 test，不修改 production。**', ''] : []),
     '<details>', '<summary>技术详情与文件清单</summary>', '',
     `COS 存储桶：${code(plan.bucket)}`, '',

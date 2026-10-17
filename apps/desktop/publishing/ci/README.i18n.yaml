@@ -9,11 +9,11 @@
   en: a610b66106849734
   zh: bc1760791f56fa28
 /desktop-ci-publication/summary:
-  en: 4427e2ecb3ae4479
-  zh: 84e7facc79a97242
+  en: d014f493dfb429f3
+  zh: 381d84a0d08f77c9
 /desktop-ci-publication/table-of-contents:
-  en: 1b6a4d7146879eec
-  zh: f2520fc412cd2d2a
+  en: f1561e7236961f68
+  zh: 815490c6b73e144f
 /desktop-ci-publication/machine-setup:
   en: 0653f0567cdd78f5
   zh: 4ab595f12f7495a6
@@ -21,8 +21,11 @@
   en: dbb85ef6987c9c7a
   zh: 62432ba2392c4b36
 /desktop-ci-publication/recovery-and-records:
-  en: 3f46e1812e9dc10b
-  zh: c1e0c3db78e5073a
+  en: f1a58a52fc780ceb
+  zh: b107c8f534a3fb63
+/desktop-ci-publication/github-release-mirror:
+  en: 507b6a176902d999
+  zh: 6611f9ccf09b0306
 /desktop-ci-publication/restore-a-channel:
   en: 0f2e6fe9d396e3c3
   zh: 53ca04e4ec0a513e

@@ -51,8 +51,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      qualification: ${{ steps.qualify.outputs.qualification }}
+      runs-on: ${{ steps.qualify.outputs.runs-on }}
+    steps:
+      - name: Resolve qualification and runner labels
+        id: qualify
+        env:
+          PACKAGE_SIGNING: ${{ inputs.signing }}
+          SIGNED_RUNNER: ${{ vars.DESKTOP_WIN_SIGNED_RUNNER }}
+        run: >-
+          node -e "const { appendFileSync } = require('node:fs');
+          const signing = process.env.PACKAGE_SIGNING;
+          if (signing !== 'unsigned' && signing !== 'signed') throw new Error('Unknown signing mode');
+          const labels = (value) => value.split(',').map((label) => label.trim()).filter(Boolean);
+          let runner;
+          if (signing === 'unsigned') { runner = ['windows-latest'] } else {
+          runner = labels(process.env.SIGNED_RUNNER || '');
+          if (runner.length === 0) throw new Error('DESKTOP_WIN_SIGNED_RUNNER is not set; signed Windows packaging needs the self-hosted signing machine');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, 'qualification=' + signing + '\nruns-on=' + JSON.stringify(runner) + '\n');"
+
   package:
-    runs-on: dsh-win-package-trial
+    needs: qualify
+    runs-on: ${{ fromJSON(needs.qualify.outputs.runs-on) }}
     timeout-minutes: 120
     defaults:
       run:

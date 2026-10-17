@@ -14,6 +14,7 @@
 | 打包来源 | <a href="https&#58;//github.com/owner/repo/actions/runs/20/attempts/3">查看打包运行 #20 · 第 3 次尝试</a><br>源码：<code>dsh-v1.0.0 @ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</code><br>打包机器：<code>windows-publisher</code> |
 | 签名与公证 | EXE 签名校验通过 |
 | Git tag | <code>desktop-v1.0.0</code> |
+| GitHub Release | <code>desktop-v1.0.0</code><br>在 COS、升级 YAML 与 Git tag 全部成功后，把同一批已审批字节镜像到该 Release；镜像结果写入运行日志，不改变本次发布结论。 |
 
 ### 批准后将执行
 
@@ -21,6 +22,7 @@
 2. 上传缺少的文件，跳过内容一致的已有文件；发现内容冲突则停止。
 3. 更新上述升级 YAML，并保存发布记录。
 4. 为实际打包提交创建上述 Git tag；若 tag 创建失败，记录“已发布，待补 tag”。
+5. 镜像上述 GitHub Release；若镜像失败，记录 `release-mirror-pending`，只重试镜像，不回滚已完成的 COS 与升级 YAML。
 
 <details>
 <summary>技术详情与文件清单</summary>

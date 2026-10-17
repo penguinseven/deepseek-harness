@@ -1,4 +1,8 @@
-/** Publish the package Artifact the routing job selected; --check reads no upload credential and contacts no COS. */
+/**
+ * Publish the package Artifact the routing job selected, then mirror it into a GitHub Release.
+ * `--check` reads no upload credential and contacts no COS; `--mirror` retries only the Release mirror
+ * of an attempt whose COS upload, feeds and tag already succeeded.
+ */
 import { createHash } from 'node:crypto'
 import { appendFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -19,7 +23,9 @@ import {
 } from './desktop-publish-config.ts'
 import { createDesktopUploadPlan, type DesktopUploadPlan } from './desktop-upload-plan.ts'
 import { desktopPublishCos } from './desktop-publish-cos.ts'
-import { createDesktopPublicationRecord, wasDesktopAttemptPublished, withDesktopChannelLock } from './desktop-publish-record.ts'
+import { createDesktopPublicationRecord, wasDesktopAttemptPublished, withDesktopChannelLock,
+  type DesktopPublicationStatus } from './desktop-publish-record.ts'
+import { desktopReleaseAssets, mirrorDesktopRelease } from './desktop-release-mirror.ts'
 import { publishDesktopRelease } from './desktop-publish.ts'
 import { desktopPublicationFailure } from './desktop-publication-failure.ts'
 import { desktopPublicationSummary } from './desktop-publication-summary.ts'
@@ -155,14 +161,14 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === import.meta.fi
   let phase = 'downloaded package, source and destination verification'
   try {
     const mode = process.argv[2]
-    if (process.argv.length !== 3 || (mode !== '--check' && mode !== '--publish')) {
-      throw new Error('Usage: publish-desktop-ci.ts --check|--publish')
+    if (process.argv.length !== 3 || (mode !== '--check' && mode !== '--publish' && mode !== '--mirror')) {
+      throw new Error('Usage: publish-desktop-ci.ts --check|--publish|--mirror')
     }
     const env = process.env
-    const { selection, manifest, config, plan, stateRoot, approval } = await prepareDesktopPublication(env)
+    const { selection, bundle, manifest, config, plan, stateRoot, approval } = await prepareDesktopPublication(env)
     verifyDesktopSource(manifest, desktopPublishApi)
     verifyDesktopApprovalEnvironment(manifest, desktopPublishApi)
-    if (mode === '--publish' && !env.DESKTOP_APPROVED_PACKAGE) {
+    if (mode !== '--check' && !env.DESKTOP_APPROVED_PACKAGE) {
       throw new Error('desktop publish: approved package digest is required')
     }
     if (mode === '--check') {
@@ -170,6 +176,7 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === import.meta.fi
         `approval=${approval}`,
         `route=${JSON.stringify(selection)}`,
         `preset=${manifest.build.preset}`,
+        `version=${plan.version}`,
         `label=${plan.version} → ${manifest.build.channel} / ${plan.target} / ${plan.environment}`,
         '',
       ].join('\n'))
@@ -180,6 +187,31 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === import.meta.fi
         await appendFile(env.GITHUB_OUTPUT, `app-client-id=${config.githubApp.clientId}\n`)
       }
       process.stdout.write(`desktop publish: verified ${plan.target} ${plan.version}; no upload credential read and no COS request made\n`)
+    } else if (mode === '--mirror') {
+      // Retry entry: the release files here are the ones COS already serves, so nothing is re-uploaded or rewritten.
+      if (plan.environment !== 'production') throw new Error('desktop publish: only a production release has a GitHub Release to mirror')
+      const mirrorToken = env.DESKTOP_TAG_TOKEN
+      if (!mirrorToken) throw new Error('desktop publish: GitHub App token is required to mirror a release')
+      const record = await createDesktopPublicationRecord(join(stateRoot, 'upload-records'), {
+        repository: manifest.repository, runId: selection.runId, attempt: selection.attempt,
+        actor: env.GITHUB_TRIGGERING_ACTOR || env.GITHUB_ACTOR || 'unknown',
+        destination: `${plan.bucket}/${plan.publicUrl}${manifest.build.channel}`, operation: 'mirror', reason: 'GitHub Release mirror retry',
+      })
+      if (env.GITHUB_OUTPUT) await appendFile(env.GITHUB_OUTPUT, `record=${record.directory}\n`)
+      let status: DesktopPublicationStatus = 'failed'
+      try {
+        phase = 'GitHub Release mirroring'
+        const result = await mirrorDesktopRelease({ repository: manifest.repository, version: plan.version,
+          assets: desktopReleaseAssets(manifest, bundle.releaseDirectory), token: mirrorToken })
+        await record.record({ type: 'mirror-complete' })
+        status = 'complete'
+        if (env.GITHUB_STEP_SUMMARY) await appendFile(env.GITHUB_STEP_SUMMARY,
+          `\nDesktop release mirror: **complete**\n\n${plan.target} ${plan.version}\n\nGitHub Release: ${result.url}（本次上传 ${result.uploaded.length} 个，已存在 ${result.present.length} 个）\n`)
+      } catch (error) {
+        await record.record({ type: 'mirror-pending', failure: desktopPublicationFailure(error, phase) })
+        status = 'release-mirror-pending'
+        throw error
+      } finally { await record.finish(status) }
     } else {
       if (plan.environment === 'production' && !env.DESKTOP_TAG_TOKEN) {
         throw new Error('desktop publish: GitHub App token is required before production upload')
@@ -198,11 +230,18 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === import.meta.fi
           destination, operation: 'publish', reason: 'Actions publication',
         })
         if (env.GITHUB_OUTPUT) await appendFile(env.GITHUB_OUTPUT, `record=${journal.directory}\n`)
-        let status: 'complete' | 'failed' | 'published-tag-pending' = 'failed'
+        let status: DesktopPublicationStatus = 'failed'
         try {
           phase = 'remote object reconciliation and publication'
           const tag = async () => { await publishDesktopTag(manifest.repository,
             plan.version, manifest.source.sha, env.DESKTOP_TAG_TOKEN || '') }
+          const mirrorRelease = async () => {
+            if (!env.DESKTOP_TAG_TOKEN) throw new Error('desktop mirror: GitHub App token is required to mirror a Release')
+            const result = await mirrorDesktopRelease({ repository: manifest.repository, version: plan.version,
+              assets: desktopReleaseAssets(manifest, bundle.releaseDirectory), token: env.DESKTOP_TAG_TOKEN })
+            await journal.record({ type: 'mirror-complete' })
+            return `${result.url}（本次上传 ${result.uploaded.length} 个，已存在 ${result.present.length} 个）`
+          }
           const result = published
             ? await (async () => {
               await journal.record({ type: 'feeds-complete' })
@@ -220,14 +259,30 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === import.meta.fi
               tag,
             })
           status = result.status
-          if (env.GITHUB_STEP_SUMMARY) await appendFile(env.GITHUB_STEP_SUMMARY,
-            `\nDesktop publication: **${status}**\n\n${plan.target} ${plan.version}\n\nSource: ${selection.runId}, attempt ${selection.attempt}\n`)
           if (result.status === 'published-tag-pending') {
             const failure = desktopPublicationFailure(result.cause, 'release tag creation')
             await journal.record({ type: 'failed', failure })
             process.stderr.write(`${JSON.stringify(failure)}\n`)
             process.exitCode = 1
           }
+          // The Release mirrors bytes COS already serves, so its own failure never fails or rolls back the publication.
+          let mirror: string
+          if (plan.environment !== 'production') {
+            mirror = `不创建（${plan.environment} 环境）`
+          } else if (status !== 'complete') {
+            mirror = '未执行：tag 尚未创建'
+          } else try {
+            mirror = await mirrorRelease()
+          } catch (error) {
+            const failure = desktopPublicationFailure(error, 'GitHub Release mirroring')
+            await journal.record({ type: 'mirror-pending', failure })
+            status = 'release-mirror-pending'
+            mirror = `release-mirror-pending（${failure.code}），重试只执行 mirror`
+            process.stderr.write(`${JSON.stringify(failure)}\n`)
+            process.exitCode = 1
+          }
+          if (env.GITHUB_STEP_SUMMARY) await appendFile(env.GITHUB_STEP_SUMMARY,
+            `\nDesktop publication: **${status}**\n\n${plan.target} ${plan.version}\n\nSource: ${selection.runId}, attempt ${selection.attempt}\n\nGitHub Release: ${mirror}\n`)
         } catch (error) {
           await journal.record({ type: 'failed', failure: desktopPublicationFailure(error, phase) })
           throw error
