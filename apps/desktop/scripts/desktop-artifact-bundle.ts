@@ -264,6 +264,16 @@ async function realDirectory(path: string): Promise<string> {
   return realpath(path)
 }
 
+async function realDirectoryIfPresent(path: string): Promise<string | undefined> {
+  try {
+    return await realDirectory(path)
+  }
+  catch (error: unknown) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined
+    throw error
+  }
+}
+
 async function containedFile(directory: string, name: string): Promise<string> {
   if (name !== basename(name)) throw new Error(`desktop artifact bundle: ${name} must be a file name`)
   const path = join(directory, name)
@@ -293,25 +303,30 @@ async function copyVerified(source: string, destination: string, expected: Deskt
   }
 }
 
-async function readEvidenceFiles(directory: string, manifest: DesktopArtifactManifest): Promise<Map<string, DesktopArtifactEvidence>> {
+async function readEvidenceFiles(
+  directory: string | undefined, manifest: DesktopArtifactManifest,
+): Promise<Map<string, DesktopArtifactEvidence>> {
   const digests = new Map(manifest.files.map(file => [file.name, file.sha256]))
   const evidence = new Map<string, DesktopArtifactEvidence>()
-  for (const file of await readdir(directory, { withFileTypes: true })) {
-    if (!file.isFile() || file.isSymbolicLink() || !file.name.endsWith('.json')) {
-      throw new Error(`desktop artifact bundle: verification/${file.name} is not a JSON file`)
-    }
-    const document = desktopArtifactEvidenceSchema.parse(await readJson(join(directory, file.name), `verification/${file.name}`))
-    if (!document.verified) throw new Error(`desktop artifact bundle: verification/${file.name} reports an unverified ${document.kind}`)
-    if (document.target !== manifest.build.target) {
-      throw new Error(`desktop artifact bundle: verification/${file.name} describes ${document.target}, not ${manifest.build.target}`)
-    }
-    for (const artifact of document.artifacts) {
-      if (digests.get(artifact.name) !== artifact.sha256) {
-        throw new Error(`desktop artifact bundle: verification/${file.name} does not match the bundled bytes of ${artifact.name}`)
+  // An artifact zip drops empty directories, so unsigned and unnotarized bundles arrive without verification/.
+  if (directory !== undefined) {
+    for (const file of await readdir(directory, { withFileTypes: true })) {
+      if (!file.isFile() || file.isSymbolicLink() || !file.name.endsWith('.json')) {
+        throw new Error(`desktop artifact bundle: verification/${file.name} is not a JSON file`)
       }
+      const document = desktopArtifactEvidenceSchema.parse(await readJson(join(directory, file.name), `verification/${file.name}`))
+      if (!document.verified) throw new Error(`desktop artifact bundle: verification/${file.name} reports an unverified ${document.kind}`)
+      if (document.target !== manifest.build.target) {
+        throw new Error(`desktop artifact bundle: verification/${file.name} describes ${document.target}, not ${manifest.build.target}`)
+      }
+      for (const artifact of document.artifacts) {
+        if (digests.get(artifact.name) !== artifact.sha256) {
+          throw new Error(`desktop artifact bundle: verification/${file.name} does not match the bundled bytes of ${artifact.name}`)
+        }
+      }
+      if (evidence.has(document.kind)) throw new Error(`desktop artifact bundle: duplicate ${document.kind} evidence`)
+      evidence.set(document.kind, document)
     }
-    if (evidence.has(document.kind)) throw new Error(`desktop artifact bundle: duplicate ${document.kind} evidence`)
-    evidence.set(document.kind, document)
   }
   for (const kind of REQUIRED_EVIDENCE[manifest.build.qualification]) {
     const document = evidence.get(kind)
@@ -387,6 +402,7 @@ export async function writeDesktopArtifactBundle(options: DesktopArtifactBundleI
 
 /**
  * Read a bundle, rehash every release file and enforce the identity a consumer expects.
+ * A missing `verification/` directory means no evidence files; only unsigned and unnotarized bundles pass that way.
  * @param directory Bundle root as downloaded or as written by the packaging job.
  * @param expected Identity the caller already committed to, such as the route it resolved.
  * @returns Validated bundle whose release directory holds exactly the manifest inventory.
@@ -422,7 +438,9 @@ export async function verifyDesktopArtifactBundle(
       throw new Error(`desktop artifact bundle: release/${file.name} does not match its manifest digests`)
     }
   }
-  const evidence = await readEvidenceFiles(await realDirectory(join(root, DESKTOP_ARTIFACT_VERIFICATION_DIRECTORY)), manifest)
+  const evidence = await readEvidenceFiles(
+    await realDirectoryIfPresent(join(root, DESKTOP_ARTIFACT_VERIFICATION_DIRECTORY)), manifest,
+  )
   const publicationDirectory = await realDirectory(join(root, DESKTOP_ARTIFACT_PUBLICATION_DIRECTORY))
   const publication = new Map<string, unknown>()
   for (const file of await readdir(publicationDirectory, { withFileTypes: true })) {

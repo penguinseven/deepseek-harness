@@ -232,6 +232,19 @@ it('rejects removed evidence and non-JSON verification files after download', as
   await expect(verifyDesktopArtifactBundle(directory)).rejects.toThrow(/is not a JSON file/u)
 })
 
+it('treats a missing verification directory as no evidence after a zip round-trip', async () => {
+  const unsigned = await fixture()
+  const directory = await unsigned.write()
+  await rm(join(directory, DESKTOP_ARTIFACT_VERIFICATION_DIRECTORY), { recursive: true })
+  const bundle = await verifyDesktopArtifactBundle(directory)
+  expect(bundle.evidence.size).toBe(0)
+
+  const signed = await fixture({ qualification: 'signed' })
+  const signedDirectory = await signed.write()
+  await rm(join(signedDirectory, DESKTOP_ARTIFACT_VERIFICATION_DIRECTORY), { recursive: true })
+  await expect(verifyDesktopArtifactBundle(signedDirectory)).rejects.toThrow(/requires windows-authenticode evidence/u)
+})
+
 it('binds production publication to a release branch or tag and permits test sources', async () => {
   const macos = { qualification: 'notarized' as const, target: 'mac-arm64' as const, platform: 'darwin' as const, arch: 'arm64' as const }
   await expect(fixture(macos, { ref: 'feature/desktop' }).then(built => built.write())).resolves.toBeDefined()
