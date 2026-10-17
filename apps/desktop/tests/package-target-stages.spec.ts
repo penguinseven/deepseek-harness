@@ -232,6 +232,21 @@ it.each([false, true])('keeps signing and runtime verification when notarization
   }
 })
 
+it.each([false, true])('builds an ad-hoc distributable without signing credentials (directory=%s)', async (directory) => {
+  const { run, stages } = supervisor()
+  await packageTarget(parseDesktopPackageInvocation(
+    ['mac-arm64', '--skip-notarization', '--ad-hoc-signing', ...(directory ? ['--dir'] : [])], 'darwin', 'arm64'),
+  environment, run)
+  expect(stages.at(-2)).toBe(`exec electron-builder --config electron-builder.config.mjs --mac --arm64 --publish never${directory ? ' --dir' : ''}`)
+  expect(stages.at(-1)).toBe('exec tsx scripts/smoke-packaged-runtime.ts --skip-notarization --ad-hoc-signing')
+  expect(run.run.mock.calls.at(-2)![3].env).toMatchObject({
+    DSH_DESKTOP_UNSIGNED: '0', DSH_DESKTOP_MACOS_SKIP_NOTARIZATION: '1', DSH_DESKTOP_AD_HOC_SIGNING: '1',
+  })
+  expect(run.run.mock.calls.at(-2)![3].env.CSC_LINK).toBeUndefined()
+  expect(withMacOSNotarizationProxy).not.toHaveBeenCalled()
+  expect(packageMacOSArtifacts).not.toHaveBeenCalled()
+})
+
 it('fails debugging packages when runtime verification fails', async () => {
   const failure = 'exec tsx scripts/smoke-packaged-runtime.ts --skip-notarization'
   const { run, stages } = supervisor(failure)
