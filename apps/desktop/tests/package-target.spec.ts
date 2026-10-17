@@ -6,6 +6,7 @@ import {
   resolveDesktopPackageTarget,
   withoutDesktopUploadCredentials,
   withoutWindowsSigningEnvironment,
+  ownsMacOSSigningKeychain,
 } from '../scripts/package-target.ts'
 
 describe('desktop package target', () => {
@@ -156,4 +157,13 @@ it('allows skipping notarization only for signed macOS packages', () => {
     expect(() => parseDesktopPackageInvocation(['mac-arm64', '--skip-notarization', flag], 'darwin', 'arm64')).toThrow(/requires a signed macOS build/u)
   }
   expect(() => parseDesktopPackageInvocation(['win-x64', '--skip-notarization'], 'win32', 'x64')).toThrow(/requires a signed macOS build/u)
+})
+
+it('imports a temporary signing keychain only for a Developer ID build', () => {
+  const invocation = (argv: string[]) => parseDesktopPackageInvocation(argv, 'darwin', 'arm64')
+  // A hosted unnotarized run signs ad hoc: it carries no p12, so importing one fails on a runner that owns none.
+  expect(ownsMacOSSigningKeychain(invocation(['mac-arm64', '--skip-notarization', '--ad-hoc-signing']))).toBe(false)
+  expect(ownsMacOSSigningKeychain(invocation(['mac-arm64', '--unsigned']))).toBe(false)
+  expect(ownsMacOSSigningKeychain(invocation(['mac-arm64']))).toBe(true)
+  expect(ownsMacOSSigningKeychain(invocation(['mac-arm64', '--skip-notarization']))).toBe(true)
 })

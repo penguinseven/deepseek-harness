@@ -192,7 +192,7 @@ export function resolveDesktopPackageTarget(
   return target
 }
 
-interface DesktopPackageInvocation {
+export interface DesktopPackageInvocation {
   readonly target: DesktopPackageTarget
   readonly directory: boolean
   readonly prepareOnly: boolean
@@ -209,6 +209,16 @@ function hostTargetName(platform: NodeJS.Platform, arch: string): DesktopPackage
   const name = `${platform === 'darwin' ? 'mac' : platform === 'win32' ? 'win' : platform}-${arch}`
   if (!isTargetName(name)) throw new Error(`desktop package: unsupported build host ${platform}-${arch}`)
   return name
+}
+
+/**
+ * Decide whether a macOS invocation imports a temporary signing keychain.
+ * @param invocation - Parsed packaging invocation.
+ * @returns Whether the build signs with a Developer ID certificate.
+ * An unsigned or ad-hoc build carries no p12, so importing one would fail on the hosted runner that owns none.
+ */
+export function ownsMacOSSigningKeychain(invocation: DesktopPackageInvocation): boolean {
+  return !invocation.unsigned && !invocation.adHocSigning
 }
 
 /**
@@ -390,9 +400,9 @@ async function main(): Promise<void> {
       recordPackagingEvent(run.directory, { type: 'macos-settings', packConcurrency: settings.packConcurrency,
         downloadProxyConfigured: settings.downloadProxy !== undefined,
         notarizationProxyConfigured: settings.notarizationProxy !== undefined })
-      await packagingStep(run.directory, 'macos-package', () => invocation.unsigned
-        ? packageTarget(invocation, environment, run)
-        : withMacOSSigningKeychain(environment, signingEnvironment => packageTarget(invocation, signingEnvironment, run)), secrets)
+      await packagingStep(run.directory, 'macos-package', () => ownsMacOSSigningKeychain(invocation)
+        ? withMacOSSigningKeychain(environment, signingEnvironment => packageTarget(invocation, signingEnvironment, run))
+        : packageTarget(invocation, environment, run), secrets)
     } else {
       await packagingStep(run.directory, 'windows-package', () => packageTarget(invocation, environment, run), secrets)
     }
