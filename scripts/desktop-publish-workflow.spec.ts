@@ -109,7 +109,7 @@ it('downloads the selected artifact before verifying it without an Environment',
   expect(check.env).toEqual({
     DESKTOP_PUBLISH_ROUTE: '${{ needs.route.outputs.selection }}',
     DESKTOP_ARTIFACT_BUNDLE_DIR: '${{ github.workspace }}/desktop-publisher/artifact-bundle',
-    DSH_PUBLISH_CONFIG_JSON: '${{ secrets.DSH_PUBLISH_CONFIG_JSON }}',
+    DSH_PUBLISH_CONFIG_JSON: '${{ vars.DSH_PUBLISH_CONFIG_JSON }}',
   })
   expect(prepare.steps.some(step => step.id === 'key' || step.id === 'app')).toBe(false)
   expect(workflow.jobs.publish!.needs).toEqual(['route', 'prepare'])
@@ -129,14 +129,14 @@ it('loads upload credentials only in the approved publish job', () => {
   })
   expect(publish.steps.find(step => step.id === 'publish')?.env).toEqual({
     DESKTOP_TAG_TOKEN: '${{ steps.app.outputs.token }}',
-    DSH_PUBLISH_CONFIG_JSON: '${{ secrets.DSH_PUBLISH_CONFIG_JSON }}',
+    DSH_PUBLISH_CONFIG_JSON: '${{ vars.DSH_PUBLISH_CONFIG_JSON }}',
     DSH_COS_CREDENTIALS_JSON: '${{ secrets.DSH_COS_CREDENTIALS_JSON }}',
     DSH_DESKTOP_PUBLISH_STATE_DIR: '${{ runner.temp }}',
   })
   // Every step that resolves the deployment configuration names where it comes from; none invents a config root.
   for (const job of [workflow.jobs.publish!, workflow.jobs.mirror!]) {
     const check = job.steps.find(step => step.id === 'check')!
-    expect(check.env?.DSH_PUBLISH_CONFIG_JSON).toBe('${{ secrets.DSH_PUBLISH_CONFIG_JSON }}')
+    expect(check.env?.DSH_PUBLISH_CONFIG_JSON).toBe('${{ vars.DSH_PUBLISH_CONFIG_JSON }}')
     expect(Object.keys(check.env ?? {})).not.toContain('DSH_PACKAGING_CONFIG_DIR')
   }
   const audit = publish.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'))!

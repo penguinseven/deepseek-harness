@@ -76,7 +76,7 @@ export function createElectronBuilderConfig(
   const macOSSigning = packagesMacOS && !unsigned && !adHocSigning ? resolveMacOSSigningEnvironment(env) : undefined
   if (packagesMacOS && !unsigned && !skipNotarization) resolveMacOSNotarizationEnvironment(env)
   const buildPaths = desktopTargetBuildPaths(resolveDesktopBuildTarget(env, hostPlatform, hostArch))
-  const output = desktopArtifactOutput(buildPaths, { unsigned, skipNotarization })
+  const output = desktopArtifactOutput(buildPaths, { unsigned, skipNotarization: skipNotarization && !adHocSigning })
   let primaryRuntimeDestination
   let dshDestination
   let windowsCode = []

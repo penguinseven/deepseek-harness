@@ -75,7 +75,7 @@ Windows NSIS 上传要求安装包旁存在生成的非空 `.exe.blockmap`。blo
 
 ## 上传凭据
 
-Windows 操作人员可以在仓库外保存 CLIXML 对象，其中 `SecretId` 和 `SecretKey` 是经 DPAPI 加密的 SecureString 字段。[凭据启动器](../scripts/upload-with-credentials.ps1)要求显式提供 `-CredentialFile` 和 `-Environment production` 或 `test`；不指定 `-Upload` 时，只验证解密以及向本地 Node 子进程注入凭据，不发起网络请求。它要求 `PATH` 中有 Node，并使用加密该文件时的 Windows 用户和机器。明文、空字段及纯空白字段都会失败。父进程环境保持不变；子进程先清除无关密钥与 Node 预加载选项，再仅接收所选 COS 凭据对。原始子进程 stderr 不会显示，stdout 中的凭据值会被遮盖。此检查不能证明 COS 授权有效。显式上传还要求 `-Upload -Target <target> -Bucket <bucket>` 及下述常规发布完成前提；真实云端上传仍需发布操作人员验收。在该上传调用中添加 `-Latest`，即可替换固定安装包，而不发布更新清单或发布标签。此启动器支持长期密钥，不支持 STS 凭据。显式上传要求所选部署环境和 bucket 与目标 dotenv 文件及已完成的打包记录一致，才会发起网络写入；即使 dotenv 文件含有其他 COS 密钥，也使用 DPAPI 凭据对。[CI 发布工作流](ci/README.zh.md)则从 `DSH_PUBLISH_CONFIG_JSON` 和 `DSH_COS_CREDENTIALS_JSON` Environment secret 读取这些值，并从 `DSH_GITHUB_APP_PRIVATE_KEY` 读取 GitHub App 私钥。
+Windows 操作人员可以在仓库外保存 CLIXML 对象，其中 `SecretId` 和 `SecretKey` 是经 DPAPI 加密的 SecureString 字段。[凭据启动器](../scripts/upload-with-credentials.ps1)要求显式提供 `-CredentialFile` 和 `-Environment production` 或 `test`；不指定 `-Upload` 时，只验证解密以及向本地 Node 子进程注入凭据，不发起网络请求。它要求 `PATH` 中有 Node，并使用加密该文件时的 Windows 用户和机器。明文、空字段及纯空白字段都会失败。父进程环境保持不变；子进程先清除无关密钥与 Node 预加载选项，再仅接收所选 COS 凭据对。原始子进程 stderr 不会显示，stdout 中的凭据值会被遮盖。此检查不能证明 COS 授权有效。显式上传还要求 `-Upload -Target <target> -Bucket <bucket>` 及下述常规发布完成前提；真实云端上传仍需发布操作人员验收。在该上传调用中添加 `-Latest`，即可替换固定安装包，而不发布更新清单或发布标签。此启动器支持长期密钥，不支持 STS 凭据。显式上传要求所选部署环境和 bucket 与目标 dotenv 文件及已完成的打包记录一致，才会发起网络写入；即使 dotenv 文件含有其他 COS 密钥，也使用 DPAPI 凭据对。[CI 发布工作流](ci/README.zh.md)则从仓库变量 `DSH_PUBLISH_CONFIG_JSON` 读取部署配置，从 `DSH_COS_CREDENTIALS_JSON` Environment secret 读取 COS 凭据对，并从 `DSH_GITHUB_APP_PRIVATE_KEY` 读取 GitHub App 私钥。
 
 <a id="audit-and-recovery"></a>
 

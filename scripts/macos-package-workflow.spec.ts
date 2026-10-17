@@ -6,6 +6,7 @@ import yaml from 'js-yaml'
 import { expect, it } from 'vitest'
 
 const workflowPath = resolve(import.meta.dirname, '../.github/workflows/macos-package.yml')
+const RELEASE_ID = '0123456789abcdef0123456789abcdef'
 const workflow = yaml.load(readFileSync(workflowPath, 'utf8')) as {
   on: Record<string, unknown>
   permissions: Record<string, string>
@@ -22,9 +23,10 @@ const workflow = yaml.load(readFileSync(workflowPath, 'utf8')) as {
  * Run the qualification step exactly as Actions would, with the notarization selection and repository variable it reads.
  * @param skipNotarization Selected debugging option, as Actions renders a boolean input.
  * @param signedRunner Repository variable holding the signing machine's labels.
+ * @param releaseId Test release ID dispatched with the run.
  * @returns Recorded step output and the failure message, if the step refused the selection.
  */
-function route(skipNotarization: string, signedRunner: string): { output: string; failure: string } {
+function route(skipNotarization: string, signedRunner: string, releaseId = RELEASE_ID): { output: string; failure: string } {
   const directory = mkdtempSync(resolve(tmpdir(), 'macos-qualify-'))
   try {
     const outputPath = resolve(directory, 'output')
@@ -32,7 +34,7 @@ function route(skipNotarization: string, signedRunner: string): { output: string
     const result = spawnSync(process.execPath, ['-e', workflow.jobs.qualify!.steps[0]!.run!.slice(invocation.length, -1)], {
       encoding: 'utf8',
       env: { ...process.env, GITHUB_OUTPUT: outputPath,
-        PACKAGE_SKIP_NOTARIZATION: skipNotarization, SIGNED_RUNNER: signedRunner },
+        PACKAGE_SKIP_NOTARIZATION: skipNotarization, SIGNED_RUNNER: signedRunner, TEST_RELEASE_ID: releaseId },
     })
     return {
       output: existsSync(outputPath) ? readFileSync(outputPath, 'utf8') : '',
@@ -90,6 +92,14 @@ it('sends unnotarized builds to a hosted runner and notarized builds to the conf
   expect(route('false', 'self-hosted, macOS, ARM64, my-signer')).toEqual({
     output: 'qualification=notarized\nruns-on=["self-hosted","macOS","ARM64","my-signer"]\n', failure: '',
   })
+})
+
+it('refuses a hosted build without the release ID its configuration requires', () => {
+  for (const releaseId of ['', 'not-a-release-id']) {
+    const { output, failure } = route('true', '', releaseId)
+    expect(output).toBe('')
+    expect(failure).toContain('test_release_id must contain 32 lowercase hexadecimal characters for hosted unnotarized packaging')
+  }
 })
 
 it('refuses a notarized build before a runner is allocated when no signing machine is configured', () => {

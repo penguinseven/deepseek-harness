@@ -295,3 +295,15 @@ it('signs debugging artifacts without Apple credentials and isolates them from r
   expect(() => createElectronBuilderConfig({ ...RELEASE_ENVIRONMENT, DSH_DESKTOP_MACOS_SKIP_NOTARIZATION: 'yes' }, 'darwin', 'arm64')).toThrow(/must be 0 or 1/u)
   expect(() => createElectronBuilderConfig({ ...RELEASE_ENVIRONMENT, DSH_DESKTOP_MACOS_SKIP_NOTARIZATION: '1', DSH_DESKTOP_UNSIGNED: '1' }, 'darwin', 'arm64')).toThrow(/requires a signed macOS build/u)
 })
+
+it('keeps ad-hoc hosted artifacts in the distribution layout the retain step expects', async () => {
+  const { createElectronBuilderConfig } = await import('../scripts/electron-builder-config.mjs')
+  const config = createElectronBuilderConfig({ ...RELEASE_ENVIRONMENT,
+    APPLE_API_KEY: undefined, APPLE_API_KEY_ID: undefined, APPLE_API_ISSUER: undefined,
+    DSH_DESKTOP_MACOS_SKIP_NOTARIZATION: '1', DSH_DESKTOP_AD_HOC_SIGNING: '1',
+  }, 'darwin', 'arm64')
+  expect(config.mac).toMatchObject({ identity: '-', notarize: false, target: ['dmg', 'zip'] })
+  expect(config.artifactName).not.toContain('-unnotarized.')
+  expect(portablePath(config.directories.output)).toContain('/.desktop-build/targets/mac-arm64/artifacts')
+  expect(portablePath(config.directories.output)).not.toContain('unnotarized-artifacts')
+})

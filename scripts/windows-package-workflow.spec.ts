@@ -6,6 +6,7 @@ import yaml from 'js-yaml'
 import { expect, it } from 'vitest'
 
 const root = resolve(import.meta.dirname, '..')
+const RELEASE_ID = '0123456789abcdef0123456789abcdef'
 type Step = {
   id?: string
   name?: string
@@ -36,16 +37,17 @@ const qualify = workflow.jobs.qualify!
  * Run the qualification step exactly as Actions would, with the signing selection and repository variable it reads.
  * @param signing Selected signing mode.
  * @param signedRunner Repository variable holding the signing machine's labels.
+ * @param releaseId Test release ID dispatched with the run.
  * @returns Recorded step output and the failure message, if the step refused the selection.
  */
-function route(signing: string, signedRunner: string): { output: string; failure: string } {
+function route(signing: string, signedRunner: string, releaseId = RELEASE_ID): { output: string; failure: string } {
   const directory = mkdtempSync(resolve(tmpdir(), 'windows-qualify-'))
   try {
     const outputPath = resolve(directory, 'output')
     const invocation = 'node -e "'
     const result = spawnSync(process.execPath, ['-e', qualify.steps[0]!.run!.slice(invocation.length, -1)], {
       encoding: 'utf8',
-      env: { ...process.env, GITHUB_OUTPUT: outputPath, PACKAGE_SIGNING: signing, SIGNED_RUNNER: signedRunner },
+      env: { ...process.env, GITHUB_OUTPUT: outputPath, PACKAGE_SIGNING: signing, SIGNED_RUNNER: signedRunner, TEST_RELEASE_ID: releaseId },
     })
     return {
       output: existsSync(outputPath) ? readFileSync(outputPath, 'utf8') : '',
@@ -161,6 +163,14 @@ it('sends unsigned builds to a hosted runner and signed builds to the configured
   expect(route('signed', 'self-hosted, Windows, X64, my-signer')).toEqual({
     output: 'qualification=signed\nruns-on=["self-hosted","Windows","X64","my-signer"]\n', failure: '',
   })
+})
+
+it('refuses a hosted build without the release ID its configuration requires', () => {
+  for (const releaseId of ['', 'not-a-release-id']) {
+    const { output, failure } = route('unsigned', '', releaseId)
+    expect(output).toBe('')
+    expect(failure).toContain('test_release_id must contain 32 lowercase hexadecimal characters for hosted unsigned packaging')
+  }
 })
 
 it('refuses a signed build before a runner is allocated when no signing machine is configured', () => {

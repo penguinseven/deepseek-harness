@@ -83,7 +83,7 @@ jobs:
         env:
           DESKTOP_PUBLISH_ROUTE: ${{ needs.route.outputs.selection }}
           DESKTOP_ARTIFACT_BUNDLE_DIR: ${{ github.workspace }}/desktop-publisher/artifact-bundle
-          DSH_PUBLISH_CONFIG_JSON: ${{ secrets.DSH_PUBLISH_CONFIG_JSON }}
+          DSH_PUBLISH_CONFIG_JSON: ${{ vars.DSH_PUBLISH_CONFIG_JSON }}
         run: node --import tsx apps/desktop/scripts/publish-desktop-ci.ts --check
 
   publish:
@@ -126,7 +126,7 @@ jobs:
         working-directory: desktop-publisher
         env:
           # The destination comes from Environment settings; this step reads no upload credential.
-          DSH_PUBLISH_CONFIG_JSON: ${{ secrets.DSH_PUBLISH_CONFIG_JSON }}
+          DSH_PUBLISH_CONFIG_JSON: ${{ vars.DSH_PUBLISH_CONFIG_JSON }}
         run: node --import tsx apps/desktop/scripts/publish-desktop-ci.ts --check
       - name: Read machine GitHub App key
         if: needs.prepare.outputs.preset == 'production'
@@ -150,7 +150,7 @@ jobs:
         working-directory: desktop-publisher
         env:
           DESKTOP_TAG_TOKEN: ${{ steps.app.outputs.token }}
-          DSH_PUBLISH_CONFIG_JSON: ${{ secrets.DSH_PUBLISH_CONFIG_JSON }}
+          DSH_PUBLISH_CONFIG_JSON: ${{ vars.DSH_PUBLISH_CONFIG_JSON }}
           DSH_COS_CREDENTIALS_JSON: ${{ secrets.DSH_COS_CREDENTIALS_JSON }}
           DSH_DESKTOP_PUBLISH_STATE_DIR: ${{ runner.temp }}
         run: node --import tsx apps/desktop/scripts/publish-desktop-ci.ts --publish
@@ -206,7 +206,7 @@ jobs:
         working-directory: desktop-publisher
         env:
           # The destination comes from Environment settings; this step reads no upload credential.
-          DSH_PUBLISH_CONFIG_JSON: ${{ secrets.DSH_PUBLISH_CONFIG_JSON }}
+          DSH_PUBLISH_CONFIG_JSON: ${{ vars.DSH_PUBLISH_CONFIG_JSON }}
         run: node --import tsx apps/desktop/scripts/publish-desktop-ci.ts --check
       - name: Read machine GitHub App key
         if: needs.prepare.outputs.preset == 'production'

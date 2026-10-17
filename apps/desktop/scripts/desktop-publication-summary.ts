@@ -65,7 +65,7 @@ export async function desktopPublicationSummary(
     '<details>', '<summary>技术详情与文件清单</summary>', '',
     `COS 存储桶：${code(plan.bucket)}`, '',
     ...(plan.environment === 'test' ? [
-      'release ID 取自原打包产物清单。打包时优先使用表单 `test_release_id`；留空则使用机器 `presets/test.env` 中的 `DOWNLOAD_TEST_RELEASE_ID`。发布时不重新选择。', '',
+      'release ID 取自原打包产物清单。打包时优先使用表单 `test_release_id`；hosted 构建必须填写，自托管签名构建留空则使用机器 `presets/test.env` 中的 `DOWNLOAD_TEST_RELEASE_ID`。发布时不重新选择。', '',
     ] : []),
     `审批摘要 SHA-256：${code(approval)}`, '',
     `共 ${plan.artifacts.length} 个文件；大小及 SHA-256 对应实际上传字节，包括更新后的 YAML 内容。`, '',

@@ -26,7 +26,7 @@ description: "在托管 runner 上从不可变的打包产物包发布 Desktop �
 
 GitHub 将已签名和已公证的产物包保留 90 天，未签名或未公证的产物包保留 30 天；打包日志仍保留 14 天。已签名的 Windows 产物包带有 `windows-authenticode` 和 `windows-timestamp` 证据，已公证的 macOS 产物包带有 `macos-codesign` 和 `macos-notarization`。每个证据文件列出其覆盖的发布文件及其 SHA-256，托管发布 runner 由此把打包字节绑定到打包机器的原生校验结果，而不必重复校验：字节变动会导致校验失败，需要重新打包并获得新的 attempt。
 
-在配置目录下创建 `publishing/test.json`，获得授权后再创建 `publishing/production.json`。每份配置声明 `bucket`、不带路径的 HTTPS `origin` 和绝对路径 `credentialsFile`。凭据文件只包含 `secretId` 和 `secretKey`。macOS 还需 `macOS.signingIdentity` 和 `macOS.teamId`；Windows 需要 `windows.certificateThumbprint`。production 必须使用 origin `https://download.deepseek.com`，并提供 `githubApp.clientId` 和绝对路径 `githubApp.privateKeyFile`。这些文件不进入 Git。上传器支持长期 COS 凭据，不支持 STS 会话凭据。不可覆盖的二进制写入要求 bucket 版本控制关闭。CI job 从 `DSH_PUBLISH_CONFIG_JSON` Environment secret 读取部署配置，从 `DSH_COS_CREDENTIALS_JSON` 读取 COS 凭据对；本地运行仍使用这些文件。每个要解析发布目标的 job 都在对应步骤上声明该 secret，两个 `--check` 步骤也包含在内：校验读取的正是审批将要授权的目标，只有发布步骤额外读取凭据对。
+在配置目录下创建 `publishing/test.json`，获得授权后再创建 `publishing/production.json`。每份配置声明 `bucket`、不带路径的 HTTPS `origin` 和绝对路径 `credentialsFile`。凭据文件只包含 `secretId` 和 `secretKey`。macOS 还需 `macOS.signingIdentity` 和 `macOS.teamId`；Windows 需要 `windows.certificateThumbprint`。production 必须使用 origin `https://download.deepseek.com`，并提供 `githubApp.clientId` 和绝对路径 `githubApp.privateKeyFile`。这些文件不进入 Git。上传器支持长期 COS 凭据，不支持 STS 会话凭据。不可覆盖的二进制写入要求 bucket 版本控制关闭。CI job 从仓库变量 `DSH_PUBLISH_CONFIG_JSON` 读取部署配置，从 `DSH_COS_CREDENTIALS_JSON` Environment secret 读取 COS 凭据对；本地运行仍使用这些文件。每个要解析发布目标的 job 都在对应步骤上声明该变量，三个 `--check` 步骤也包含在内，因此 `prepare` 无需进入审批 Environment 就能校验审批将要授权的目标；只有审批后的发布步骤额外读取凭据对。
 
 发布 job 在托管的 Ubuntu runner 上运行，因此流程中不再有 `DESKTOP_PUBLISH_RUNNERS`、runner 标签和 `DSH_DESKTOP_RELEASES_DIR`，打包机器也不需要可访问的磁盘或局域网路径。签名材料从不进入产物包：Windows EV token 与 PIN、Apple 签名和公证密钥以及 COS 凭据对留在打包机器或 Environment secret 中，发布 runner 不携带其中任何一项。GitHub App 私钥通过 `DSH_GITHUB_APP_PRIVATE_KEY` Environment secret 提供。
 
@@ -62,7 +62,7 @@ Environment 审批限制此工作流，不限制产出其产物包的打包机�
 
 ## GitHub Release 镜像
 
-`mirror` job 在 `route`、`prepare`、`publish` 全部成功后才运行（`--publish` 在 COS、feed 与 tag 完成后即以 0 退出，镜像失败不可能藏在发布失败后面），且只针对 tag 已创建的 production。它下载同一个打包产物包，并在读取 GitHub App 私钥之前重新用审批摘要校验产物包，因此未签名、未公证或已被改动的字节无法进入镜像。该 job 的所有步骤都不带 `DSH_COS_CREDENTIALS_JSON` 与 `DSH_PUBLISH_CONFIG_JSON`，结构上无法重传 COS 或改写 feed；`publish-desktop-ci.ts --mirror` 只校验产物包并上传 `release/`。
+`mirror` job 在 `route`、`prepare`、`publish` 全部成功后才运行（`--publish` 在 COS、feed 与 tag 完成后即以 0 退出，镜像失败不可能藏在发布失败后面），且只针对 tag 已创建的 production。它下载同一个打包产物包，并在读取 GitHub App 私钥之前重新用审批摘要校验产物包，因此未签名、未公证或已被改动的字节无法进入镜像。该 job 的所有步骤都不带 `DSH_COS_CREDENTIALS_JSON`；只有校验步骤读取保存 `DSH_PUBLISH_CONFIG_JSON` 的仓库变量，结构上无法重传 COS 或改写 feed；`publish-desktop-ci.ts --mirror` 只校验产物包并上传 `release/`。
 
 镜像幂等且逐字节一致。每个资产在上传前按 manifest 重新计算哈希；已存在的文件只有在大小与 SHA-256 都与 manifest 一致时才直接确认。GitHub 在资产列表给出 `digest` 时以它为准，没有该字段的旧资产则下载后计算哈希。大小或哈希不一致都会在任何上传前停止镜像，而不是覆盖已发布的下载字节；上传后的回读同样要求存储字节匹配该摘要。同一版本重复执行只会补齐缺失项。
 

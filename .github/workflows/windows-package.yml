@@ -16,7 +16,7 @@ on:
         default: unsigned
         required: true
       test_release_id:
-        description: '测试 release ID：32 位小写十六进制随机前缀（非鉴权）；留空使用机器默认值，连续升级测试须保持相同值'
+        description: '测试 release ID：32 位小写十六进制随机前缀（非鉴权）；hosted 构建必填，自托管签名构建留空使用机器默认值，连续升级测试须保持相同值'
         type: string
         default: ''
         required: false
@@ -63,13 +63,16 @@ jobs:
         env:
           PACKAGE_SIGNING: ${{ inputs.signing }}
           SIGNED_RUNNER: ${{ vars.DESKTOP_WIN_SIGNED_RUNNER }}
+          TEST_RELEASE_ID: ${{ inputs.test_release_id }}
         run: >-
           node -e "const { appendFileSync } = require('node:fs');
           const signing = process.env.PACKAGE_SIGNING;
           if (signing !== 'unsigned' && signing !== 'signed') throw new Error('Unknown signing mode');
           const labels = (value) => value.split(',').map((label) => label.trim()).filter(Boolean);
           let runner;
-          if (signing === 'unsigned') { runner = ['windows-latest'] } else {
+          if (signing === 'unsigned') {
+          if (!/^[a-f0-9]{32}$/.test(process.env.TEST_RELEASE_ID || '')) throw new Error('test_release_id must contain 32 lowercase hexadecimal characters for hosted unsigned packaging');
+          runner = ['windows-latest'] } else {
           runner = labels(process.env.SIGNED_RUNNER || '');
           if (runner.length === 0) throw new Error('DESKTOP_WIN_SIGNED_RUNNER is not set; signed Windows packaging needs the self-hosted signing machine');
           }

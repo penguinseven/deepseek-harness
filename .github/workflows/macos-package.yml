@@ -15,7 +15,7 @@ on:
         default: false
         required: true
       test_release_id:
-        description: '测试 release ID：32 位小写十六进制随机前缀（非鉴权）；留空使用机器默认值，连续升级测试须保持相同值'
+        description: '测试 release ID：32 位小写十六进制随机前缀（非鉴权）；hosted 构建必填，自托管签名构建留空使用机器默认值，连续升级测试须保持相同值'
         type: string
         default: ''
         required: false
@@ -62,6 +62,7 @@ jobs:
         env:
           PACKAGE_SKIP_NOTARIZATION: ${{ inputs.skip_notarization }}
           SIGNED_RUNNER: ${{ vars.DESKTOP_MAC_SIGNED_RUNNER }}
+          TEST_RELEASE_ID: ${{ inputs.test_release_id }}
         run: >-
           node -e "const { appendFileSync } = require('node:fs');
           const skip = process.env.PACKAGE_SKIP_NOTARIZATION;
@@ -69,7 +70,9 @@ jobs:
           const labels = (value) => value.split(',').map((label) => label.trim()).filter(Boolean);
           let runner;
           let qualification;
-          if (skip === 'true') { runner = ['macos-14']; qualification = 'unnotarized' } else {
+          if (skip === 'true') {
+          if (!/^[a-f0-9]{32}$/.test(process.env.TEST_RELEASE_ID || '')) throw new Error('test_release_id must contain 32 lowercase hexadecimal characters for hosted unnotarized packaging');
+          runner = ['macos-14']; qualification = 'unnotarized' } else {
           runner = labels(process.env.SIGNED_RUNNER || '');
           qualification = 'notarized';
           if (runner.length === 0) throw new Error('DESKTOP_MAC_SIGNED_RUNNER is not set; notarized macOS packaging needs the self-hosted signing machine');
